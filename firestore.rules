@@ -1,0 +1,174 @@
+
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ============================================================
+    // HELPER FUNCTIONS
+    // ============================================================
+    
+    // Check if user is authenticated
+    function isAuth() {
+      return request.auth != null;
+    }
+    
+    // Check if user is the owner of the document
+    function isOwner(userId) {
+      return isAuth() && request.auth.uid == userId;
+    }
+    
+    // Get current user document
+    function getUserDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    
+    // Check if user is an admin
+    function isAdmin() {
+      return isAuth() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+    
+    // Check if user is a driver
+    function isDriver() {
+      return isAuth() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isDriver == true;
+    }
+    
+    // Check if user can read this booking (owner, driver, or admin)
+    function canReadBooking(bookingData) {
+      return isOwner(bookingData.userId) || isDriver() || isAdmin();
+    }
+    
+    // ============================================================
+    // USERS COLLECTION
+    // ============================================================
+    
+    match /users/{userId} {
+      // Users can read their own document
+      allow read: if isOwner(userId) || isAdmin();
+      
+      // Users can write their own document (limited fields)
+      allow write: if isOwner(userId) &&
+        request.resource.data.keys().hasOnly([
+          'name', 'email', 'phone', 'profilePicture', 'dateOfBirth',
+          'address', 'city', 'state', 'pincode', 'updatedAt'
+        ]);
+      
+      // Admins can read/write any user document
+      allow read, write: if isAdmin();
+      
+      // New users can create their own document
+      allow create: if isAuth() && userId == request.auth.uid;
+    }
+    
+    // ============================================================
+    // BOOKINGS COLLECTION
+    // ============================================================
+    
+    match /bookings/{bookingId} {
+      // READ: Owner, drivers, or admins can read
+      allow read: if isAuth() && (resource == null || canReadBooking(resource.data));
+      
+      // CREATE: Authenticated users can create (backend validates ownership)
+      allow create: if isAuth() &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.status == "pending" &&
+        request.resource.data.createdAt == request.time;
+      
+      // UPDATE: Only admins (backend Cloud Functions) can update
+      allow update: if false;
+      
+      // DELETE: Only admins can delete
+      allow delete: if false;
+    }
+    
+    // ============================================================
+    // PAYMENTS COLLECTION
+    // ============================================================
+    
+    match /payments/{paymentId} {
+      // READ: Only the booking owner, drivers, or admins can read their payments
+      allow read: if isAuth() && (
+        resource == null ||
+        isOwner(resource.data.userId) ||
+        isDriver() ||
+        isAdmin()
+      );
+      
+      // WRITE: Cloud Functions use Admin SDK (bypasses rules entirely).
+      // Client-side writes are blocked — all payment writes go through Cloud Functions.
+      allow write: if false;
+    }
+    
+    // ============================================================
+    // NOTIFICATIONS COLLECTION
+    // ============================================================
+    
+    match /notifications/{notificationId} {
+      // READ: Users can read their own notifications
+      allow read: if isAuth() && (
+        resource == null ||
+        resource.data.userId == request.auth.uid ||
+        isAdmin()
+      );
+      
+      // WRITE: Only backend (Admin SDK) or admins write notifications
+      allow write: if isAdmin();
+    }
+    
+    // ============================================================
+    // PRICING RULES COLLECTION
+    // ============================================================
+    
+    match /pricing_rules/{ruleId} {
+      // Authenticated users can read pricing rules
+      allow read: if isAuth();
+      
+      // Only admins can write pricing rules
+      allow write: if isAdmin();
+    }
+    
+    // ============================================================
+    // DESTINATIONS COLLECTION
+    // ============================================================
+    
+    match /destinations/{destinationId} {
+      // Authenticated users can read destinations
+      allow read: if isAuth();
+      
+      // Only admins can write
+      allow write: if isAdmin();
+    }
+    
+    // ============================================================
+    // FLEETS COLLECTION
+    // ============================================================
+    
+    match /fleets/{fleetId} {
+      // Authenticated users can read fleets
+      allow read: if isAuth();
+      
+      // Only admins can write
+      allow write: if isAdmin();
+    }
+    
+    // ============================================================
+    // DRIVERS COLLECTION
+    // ============================================================
+    
+    match /drivers/{driverId} {
+      // Drivers can read their own document
+      allow read: if isOwner(driverId) || isAdmin();
+      
+      // Drivers can update their own document
+      allow write: if isOwner(driverId) || isAdmin();
+    }
+    
+    // ============================================================
+    // DEFAULT: DENY ALL
+    // ============================================================
+    
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

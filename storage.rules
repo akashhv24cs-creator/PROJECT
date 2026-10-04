@@ -1,0 +1,20 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // User profile image storage rules
+    match /profile-images/{userId}/{fileName} {
+      // Allow any authenticated user to view profile photos (or public if required for shared avatars)
+      allow read: if request.auth != null;
+      
+      // Strict ownership check: Only the authenticated user can upload/modify their own avatar
+      allow write: if request.auth != null 
+                   && request.auth.uid == userId
+                   && request.resource.size < 5 * 1024 * 1024 // Max 5MB
+                   && request.resource.contentType.matches('image/(jpeg|png|webp|jpg)');
+      
+      // Only owner or admin can delete avatar
+      allow delete: if request.auth != null && (request.auth.uid == userId || request.auth.token.role == 'admin');
+    }
+  }
+}

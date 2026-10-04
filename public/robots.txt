@@ -1,0 +1,20 @@
+# https://www.robotstxt.org/robotstxt.html
+User-agent: *
+Allow: /
+Allow: /book
+Allow: /assets/
+Allow: /favicon.svg
+Allow: /og-image.png
+Allow: /manifest.webmanifest
+
+# Disallow private customer pages, auth, and internal dev views
+Disallow: /dashboard
+Disallow: /bookings
+Disallow: /bookings/
+Disallow: /booking/
+Disallow: /profile
+Disallow: /login
+Disallow: /firebase-test
+
+# Host & Sitemap
+Sitemap: https://zenera-trips.web.app/sitemap.xml
