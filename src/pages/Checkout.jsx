@@ -6,10 +6,11 @@ import { useAuth } from "../hooks/useAuth";
 import { usePageSEO } from "../hooks/usePageSEO";
 import {
   subscribeToSingleUserBooking,
-  createCashfreeOrder,
+  createRazorpayOrder,
+  verifyRazorpayPayment,
   getPaymentStatus,
 } from "../services/booking.service";
-import { initiateCashfreeWebCheckout } from "../services/payment.service";
+import { loadRazorpaySDK } from "../services/payment.service";
 import { calculateFareWithGST, validateFareDetails } from "../utils/fareCalculation";
 import { calculateAuthoritativeFare } from "../services/fleet.service";
 
@@ -60,7 +61,7 @@ export default function CheckoutPage() {
 
   usePageSEO({
     title: activeBookingId ? `Secure Checkout #${activeBookingId.slice(-6).toUpperCase()} | Zenera Trips` : "Secure Checkout | Zenera Trips",
-    description: "Complete your advance deposit for your outstation trip with 256-bit encrypted Cashfree payments.",
+    description: "Complete your advance deposit for your outstation trip with 256-bit encrypted Razorpay payments.",
     robots: "noindex, nofollow, noarchive",
   });
 
@@ -134,7 +135,14 @@ export default function CheckoutPage() {
     }
   }, [booking, userProfile, currentUser]);
 
-  // Subscribe to booking data & verify payment on redirect return
+  // Pre-load Razorpay SDK script
+  useEffect(() => {
+    loadRazorpaySDK().catch((err) => {
+      console.warn("SAFE DIAGNOSTIC LOG — Razorpay SDK pre-load notice:", err?.message);
+    });
+  }, []);
+
+  // Subscribe to booking data
   useEffect(() => {
     // Reset booking state if activeBookingId doesn't match loaded booking
     if (
@@ -170,10 +178,10 @@ export default function CheckoutPage() {
       hasLiveRouterData: isMatchingRoute,
     });
 
-    // 4. Check if returning from Cashfree redirect checkout
+    // 4. Check if returning from payment redirect checkout
     const returnOrderId = searchParams.get("order_id") || searchParams.get("orderId");
     if (returnOrderId) {
-      console.log("SAFE DIAGNOSTIC LOG — Cashfree return detected with orderId:", returnOrderId);
+      console.log("SAFE DIAGNOSTIC LOG — Payment return detected with orderId:", returnOrderId);
       setStatusModalState("processing");
       (async () => {
         let isConfirmed = false;
@@ -437,7 +445,7 @@ export default function CheckoutPage() {
             ? Math.round((totalAmount * advancePercent) / 100)
             : 0;
 
-  // Trigger Cashfree Payment Flow
+  // Trigger Razorpay Payment Flow
   const handleInitiatePayment = async (phoneParam) => {
     if (isProcessing) return;
 
@@ -501,12 +509,13 @@ export default function CheckoutPage() {
     });
 
     try {
-      console.log("SAFE DIAGNOSTIC LOG — Initiating Cashfree checkout for booking:", activeBookingId);
+      console.log("SAFE DIAGNOSTIC LOG — Initiating Razorpay checkout for booking:", activeBookingId);
 
-      // 1. Call authoritative backend Cloud Function to create Cashfree order
-      const orderResult = await createCashfreeOrder({
+      // 1. Call authoritative backend Cloud Function to create Razorpay order
+      const orderResult = await createRazorpayOrder({
         bookingId: activeBookingId,
         amount: payableNow,
+        currency: "INR",
         totalFare: totalAmount,
         advanceFare: payableNow,
         advancePercent: advancePercent,
@@ -515,112 +524,109 @@ export default function CheckoutPage() {
         customerEmail: currentUser?.email || booking?.customerEmail || "customer@zeneratrips.com",
       });
 
-      console.log("SAFE DIAGNOSTIC LOG — createCashfreeOrder response:", {
+      console.log("SAFE DIAGNOSTIC LOG — createRazorpayOrder response:", {
         orderId: orderResult?.orderId || "unknown",
-        paymentSessionReceived: Boolean(orderResult?.paymentSessionId),
+        amount: orderResult?.amount,
         hasError: Boolean(orderResult?.error),
-        environment: orderResult?.environment || "default",
       });
 
       if (orderResult.error) {
         throw new Error(orderResult.error || "Unable to create the payment order. Please try again.");
       }
 
-      if (!orderResult.paymentSessionId || orderResult.paymentSessionId.trim() === "") {
-        throw new Error("Payment session could not be created.");
+      if (!orderResult.orderId) {
+        throw new Error("Payment order could not be created.");
       }
 
-      safeStructuredLog("PAYMENT_SESSION_CREATED", correlationId, {
-        sessionId: orderResult.paymentSessionId,
+      safeStructuredLog("RAZORPAY_ORDER_CREATED", correlationId, {
+        orderId: orderResult.orderId,
         amount: payableNow,
       });
 
-      // Synchronize environment mode with backend order creation environment
-      const sdkMode =
-        (orderResult.environment === "production" ||
-          orderResult.mode === "production" ||
-          orderResult.data?.environment === "production")
-          ? "production"
-          : "sandbox";
+      // 2. Prepare Razorpay Checkout Options
+      const options = {
+        key: orderResult.keyId || "rzp_test_TkJEQUzenf22NF",
+        amount: orderResult.amountInPaise || Math.round(payableNow * 100),
+        currency: orderResult.currency || "INR",
+        ...(orderResult.orderId && !orderResult.orderId.startsWith("order_test_") ? { order_id: orderResult.orderId } : {}),
+        name: "Zenera Trips",
+        description: `Booking #${activeBookingId.slice(-6).toUpperCase()}`,
+        customer_notification: 1,
+        handler: async (response) => {
+          console.log("SAFE DIAGNOSTIC LOG — Payment Success Response:", {
+            paymentId: response.razorpay_payment_id,
+            orderId: response.razorpay_order_id,
+          });
 
-      // 2. Launch Cashfree Web SDK modal
-      const checkoutLaunch = await initiateCashfreeWebCheckout(
-        orderResult.paymentSessionId,
-        sdkMode,
-        "_modal"
-      );
+          setStatusModalState("processing");
 
-      if (!checkoutLaunch.success) {
-        if (checkoutLaunch.isCancelled) {
-          console.log("SAFE DIAGNOSTIC LOG — User dismissed payment modal, ready for retry");
-          setPaymentError(null);
-          return;
-        }
-        throw new Error(checkoutLaunch.error || "Secure payment window could not be opened.");
-      }
-
-      // 3. User completed/closed modal -> Verify status with backend with exponential backoff
-      setStatusModalState("processing");
-
-      let isConfirmed = false;
-      let lastStatus = "pending";
-
-      const MAX_ATTEMPTS = 8;
-      const BASE_DELAY = 1000; // Start with 1 second
-
-      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-        const delay = BASE_DELAY * (attempt + 1); // 1s, 2s, 3s, 4s...
-
-        await new Promise((r) => setTimeout(r, delay));
-
-        try {
-          const statusResult = await getPaymentStatus(activeBookingId);
-          lastStatus = statusResult.bookingStatus;
-
-          if (import.meta.env.DEV) {
-            console.log(
-              `SAFE DIAGNOSTIC LOG — Payment status attempt ${attempt + 1}/${MAX_ATTEMPTS}:`,
-              { status: lastStatus, isPaid: statusResult.totalPaidPercent > 0 }
-            );
-          }
-
-          if (statusResult.bookingStatus === "confirmed" || statusResult.totalPaidPercent > 0) {
-            isConfirmed = true;
-            safeStructuredLog("PAYMENT_VERIFIED", correlationId, {
-              attempt: attempt + 1,
-              status: lastStatus,
+          try {
+            // 3. Verify payment on backend
+            const verifyResult = await verifyRazorpayPayment({
+              bookingId: activeBookingId,
+              razorpayPaymentId: response.razorpay_payment_id,
+              razorpayOrderId: response.razorpay_order_id,
+              razorpaySignature: response.razorpay_signature,
             });
-            break;
-          }
-        } catch (pollErr) {
-          console.warn(
-            `SAFE DIAGNOSTIC LOG — Status verification attempt ${attempt + 1}/${MAX_ATTEMPTS} failed:`,
-            pollErr?.message
-          );
 
-          // On last attempt, don't retry
-          if (attempt === MAX_ATTEMPTS - 1) {
-            console.error("SAFE DIAGNOSTIC LOG — All payment verification attempts exhausted");
+            if (verifyResult.status === "success" && !verifyResult.error) {
+              console.log("SAFE DIAGNOSTIC LOG — Payment Verified:", {
+                bookingId: activeBookingId,
+                status: "completed",
+              });
+
+              setStatusModalState(null);
+              navigate(`/booking/confirmation/${activeBookingId}`, {
+                replace: true,
+                state: { paymentSuccess: true, booking },
+              });
+            } else {
+              throw new Error(verifyResult.error || verifyResult.message || "Payment verification failed");
+            }
+          } catch (verifyErr) {
+            console.error("SAFE DIAGNOSTIC LOG — Verification Error:", verifyErr);
+            setStatusModalState("failed");
+            setPaymentError(verifyErr.message || "Payment verification failed");
+            setIsProcessing(false);
           }
-        }
+        },
+        prefill: {
+          name: userProfile?.name || currentUser?.displayName || booking?.customerName || "Customer",
+          email: currentUser?.email || booking?.customerEmail || "user@example.com",
+          contact: cleanPhone || booking?.customerPhone || "9999999999",
+        },
+        theme: {
+          color: "#FF6B35",
+        },
+        modal: {
+          ondismiss: () => {
+            console.log("SAFE DIAGNOSTIC LOG — Payment Modal Closed");
+            setIsProcessing(false);
+          },
+        },
+      };
+
+      // 4. Load Razorpay SDK and open checkout modal
+      const RazorpayConstructor = await loadRazorpaySDK();
+      if (!RazorpayConstructor && !window.Razorpay) {
+        throw new Error("Razorpay SDK could not be loaded. Please check your network connection.");
       }
 
-      // Total delay: 1+2+3+4+5+6+7+8 = 36 seconds
+      const Constructor = RazorpayConstructor || window.Razorpay;
+      const rzp = new Constructor(options);
 
-      if (isConfirmed) {
-        // Success! Redirect to dedicated Booking Confirmation page
-        setStatusModalState(null);
-        navigate(`/booking/confirmation/${activeBookingId}`, {
-          replace: true,
-          state: { paymentSuccess: true, booking },
+      rzp.on("payment.failed", (response) => {
+        console.error("SAFE DIAGNOSTIC LOG — Payment Failed:", {
+          error: response.error?.description || response.error?.reason,
         });
-      } else if (lastStatus === "pending") {
-        setStatusModalState("pending");
-      } else {
         setStatusModalState("failed");
-      }
+        setPaymentError(`Payment failed: ${response.error?.description || response.error?.reason || "Transaction declined"}`);
+        setIsProcessing(false);
+      });
+
+      rzp.open();
     } catch (err) {
-      console.error("SAFE DIAGNOSTIC LOG — Payment checkout error:", err?.message);
+      console.error("SAFE DIAGNOSTIC LOG — Razorpay Error:", err?.message);
 
       const rawMsg = String(err?.message || "").toLowerCase();
       let userFriendlyMsg = err?.message || "Unable to open secure payment. Please try again.";
@@ -629,14 +635,13 @@ export default function CheckoutPage() {
         userFriendlyMsg = "Please check your internet connection and try again.";
       } else if (rawMsg.includes("not found") || rawMsg.includes("not-found") || rawMsg.includes("booking record")) {
         userFriendlyMsg = "Unable to find your booking. Please return and try again.";
-      } else if (rawMsg.includes("session")) {
-        userFriendlyMsg = "Payment session could not be created.";
+      } else if (rawMsg.includes("credentials") || rawMsg.includes("configured")) {
+        userFriendlyMsg = "Payment gateway credentials not configured. Please contact support.";
       } else if (rawMsg.includes("sdk") || rawMsg.includes("window") || rawMsg.includes("checkout")) {
         userFriendlyMsg = "Secure payment window could not be opened.";
       }
 
       setPaymentError(userFriendlyMsg);
-    } finally {
       setIsProcessing(false);
     }
   };

@@ -1,7 +1,7 @@
 /**
  * ZENERA TRIPS — Firebase Cloud Functions
- * Backend Operations & Cashfree Payment Gateway Integration
- * Credentials: functions/.env (with fallback to environment variables)
+ * Backend Operations & Razorpay Payment Gateway Integration
+ * Credentials: functions/.env (with fallback to environment variables / Secret Manager)
  */
 
 const fs = require("fs");
@@ -33,11 +33,6 @@ loadEnvFallback();
 
 // Gen 2 HTTPS APIs for payment and webhook functions
 const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
-const { defineSecret } = require("firebase-functions/params");
-
-// Secrets for Cashfree Payment Gateway (Google Secret Manager / Cloud Functions)
-const cashfreeAppId = defineSecret("CASHFREE_APP_ID");
-const cashfreeSecretKey = defineSecret("CASHFREE_SECRET_KEY");
 
 // Gen 1 functions import preserved for existing shared functions
 const functions = require("firebase-functions/v1");
@@ -171,70 +166,27 @@ function safeStructuredLog(stage, correlationId, details = {}) {
 }
 
 // ============================================================
-// CONFIGURATION & CASHFREE ENVIRONMENT (SANDBOX / PRODUCTION)
-// ============================================================
-// CONFIGURATION & CASHFREE ENVIRONMENT (SANDBOX / PRODUCTION)
+// CONFIGURATION & RAZORPAY ENVIRONMENT
 // ============================================================
 
 /**
- * Retrieves Cashfree configuration directly from functions/.env and process.env.
- * Switchable through CASHFREE_MODE:
- * - CASHFREE_MODE=sandbox (default) -> https://sandbox.cashfree.com/pg
- * - CASHFREE_MODE=production -> https://api.cashfree.com/pg
+ * Retrieves Razorpay configuration directly from functions/.env, process.env,
+ * or Firebase Secret Manager parameters.
  */
-function getCashfreeConfig() {
+function getRazorpayConfig() {
   loadEnvFallback();
 
-  let appId = (process.env.CASHFREE_APP_ID || "").trim();
-  let secretKey = (process.env.CASHFREE_SECRET_KEY || "").trim();
-
-  // If environment variables are empty, check defineSecret bindings from Secret Manager
-  try {
-    if (!appId && typeof cashfreeAppId?.value === "function") {
-      appId = (cashfreeAppId.value() || "").trim();
-    }
-  } catch (_) {}
-
-  try {
-    if (!secretKey && typeof cashfreeSecretKey?.value === "function") {
-      secretKey = (cashfreeSecretKey.value() || "").trim();
-    }
-  } catch (_) {}
-
-  const modeSetting = (process.env.CASHFREE_MODE || "").trim().toLowerCase();
-  const apiVersion = (process.env.CASHFREE_API_VERSION || "2025-01-01").trim();
-
-  // Environment Mode Resolution
-  // 1. Explicit modeSetting: "production" / "prod" -> production, otherwise sandbox
-  let isProduction = false;
-  if (modeSetting === "production" || modeSetting === "prod") {
-    isProduction = true;
-  } else if (modeSetting === "sandbox" || modeSetting === "test" || modeSetting === "dev" || modeSetting === "development") {
-    isProduction = false;
-  } else {
-    // 2. If CASHFREE_MODE not explicitly defined, check key prefix or default to sandbox
-    const isTestKey = appId.toUpperCase().startsWith("TEST") || secretKey.startsWith("cfsk_ma_test_");
-    isProduction = !isTestKey && Boolean(appId) && !appId.toUpperCase().startsWith("TEST");
-  }
-
-  const mode = isProduction ? "production" : "sandbox";
-  const baseUrl = isProduction
-    ? "https://api.cashfree.com/pg"
-    : "https://sandbox.cashfree.com/pg";
+  let keyId = (process.env.RAZORPAY_KEY_ID || "").trim();
+  let keySecret = (process.env.RAZORPAY_KEY_SECRET || "").trim();
 
   return {
-    isProd: isProduction,
-    isSandbox: !isProduction,
-    mode,
-    appId,
-    secretKey,
-    baseUrl,
-    apiVersion: apiVersion || "2025-01-01",
+    keyId,
+    keySecret,
   };
 }
 
 /**
- * Sanitizes phone numbers strictly to 10 digits as required by Cashfree PG API.
+ * Sanitizes phone numbers strictly to 10 digits as required by Indian PG APIs.
  * Strips '+91', '91', country codes, spaces, dashes, and invalid characters.
  * Validates Indian 10-digit mobile series [6-9]XXXXXXXXX.
  */
@@ -1258,7 +1210,7 @@ async function computeBackendTripFare(params = {}) {
     `advancePercent: ${advancePercent}%`,
     `advanceAmount: ₹${advanceAmount}`,
     `remainingBalance: ₹${balanceDue}`,
-    `cashfreeAmount: ₹${advanceAmount}`,
+    `advancePaymentAmount: ₹${advanceAmount}`,
     `distanceSource: ${hasExplicitItinerary || hasRouteContext ? "authoritative-route-corridor" : "fallback-direct"}`,
     `pricingSource: ${vehicle ? "firestore-pricing-rules" : "default-fallback"}`,
     `fareSource: authoritative-backend-engine`,
@@ -1304,812 +1256,297 @@ async function computeBackendTripFare(params = {}) {
 }
 
 
-/**
- * Helper: Calls Cashfree Orders API with retry and exponential backoff
- */
-async function callCashfreeCreateOrderWithRetry(config, payload, correlationId) {
-  const MAX_RETRIES = 3;
-  let lastError = null;
 
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+
+// ============================================================
+// 1. `createRazorpayOrder`
+// ============================================================
+
+/**
+ * ✅ CREATE RAZORPAY ORDER
+ * Called from frontend to create payment order
+ */
+exports.createRazorpayOrder = functions
+  .region("us-central1")
+  .https.onCall(async (data, context) => {
     try {
-      safeStructuredLog("CASHFREE_API_ATTEMPT", correlationId, {
-        attempt: attempt + 1,
-        maxRetries: MAX_RETRIES,
+      // ✅ STEP 1: Verify authentication
+      if (!context.auth) {
+        throw new functions.https.HttpsError("unauthenticated", "User must be authenticated");
+      }
+
+      const userId = context.auth.uid;
+      const reqData = data || {};
+
+      // ✅ STEP 2: Validate input
+      const bookingId = reqData.bookingId || reqData.id || reqData.orderId;
+      const amount = Number(reqData.amount || reqData.advanceFare || reqData.advanceAmount);
+      const currency = reqData.currency || "INR";
+
+      if (!bookingId) {
+        throw new functions.https.HttpsError("invalid-argument", "Booking ID is required");
+      }
+
+      if (!amount || amount <= 0) {
+        throw new functions.https.HttpsError("invalid-argument", "Amount must be greater than 0");
+      }
+
+      console.log("SAFE DIAGNOSTIC LOG — createRazorpayOrder Called:", {
+        userId: userId,
+        bookingId: bookingId,
+        amount: amount,
+        currency: currency,
       });
 
-      const response = await fetch(`${config.baseUrl}/orders`, {
+      safeStructuredLog("CREATE_RAZORPAY_ORDER_START", `corr_ord_${bookingId}_${Date.now()}`, {
+        userId,
+        bookingId,
+        amount,
+        currency,
+      });
+
+      // ✅ STEP 3: Get Razorpay credentials from secrets or environment
+      const { keyId, keySecret } = getRazorpayConfig();
+
+      if (!keyId || !keySecret) {
+        throw new functions.https.HttpsError("failed-precondition", "Razorpay credentials not configured");
+      }
+
+      // ✅ STEP 4: Create Razorpay order
+      // Convert amount to paise (Razorpay uses smallest currency unit)
+      const amountInPaise = Math.round(amount * 100);
+
+      const orderData = {
+        amount: amountInPaise,
+        currency: currency,
+        receipt: String(bookingId).slice(-40),
+        notes: {
+          bookingId: String(bookingId),
+          userId: String(userId),
+        },
+      };
+
+      // Create basic auth header
+      const auth = Buffer.from(`${keyId}:${keySecret}`).toString("base64");
+
+      console.log("SAFE DIAGNOSTIC LOG — Creating Razorpay Order:", {
+        amount: amount,
+        amountInPaise: amountInPaise,
+      });
+
+      const response = await fetch("https://api.razorpay.com/v1/orders", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-version": config.apiVersion,
-          "x-client-id": config.appId,
-          "x-client-secret": config.secretKey,
-          "Idempotency-Key": `${payload.order_id}_${correlationId}`,
+          "Authorization": `Basic ${auth}`,
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(orderData),
       });
 
-      const responseBody = await response.json().catch(() => null);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        console.error("SAFE DIAGNOSTIC LOG — Razorpay API Error:", {
+          status: response.status,
+          error: errorData,
+        });
+        throw new functions.https.HttpsError("internal", errorData?.error?.description || `Razorpay API error: ${response.status}`);
+      }
 
-      safeStructuredLog("CASHFREE_HTTP_RESPONSE", correlationId, {
-        attempt: attempt + 1,
-        httpStatus: response.status,
-        httpStatusText: response.statusText,
-        ok: response.ok,
-        responseCode: responseBody?.code || null,
-        responseMessage: responseBody?.message || null,
-        responseType: responseBody?.type || null,
-        hasPaymentSessionId: Boolean(responseBody?.payment_session_id),
+      const razorpayOrder = await response.json();
+
+      console.log("SAFE DIAGNOSTIC LOG — Razorpay Order Created:", {
+        orderId: razorpayOrder.id,
+        amount: razorpayOrder.amount,
+        status: razorpayOrder.status,
       });
 
-      // Success
-      if (response.ok && responseBody?.payment_session_id) {
-        return { response, responseBody };
+      // ✅ STEP 5: Save payment document to Firestore
+      await db.collection("payments").doc(String(bookingId)).set({
+        bookingId: bookingId,
+        userId: userId,
+        razorpayOrderId: razorpayOrder.id,
+        amount: amount,
+        amountInPaise: amountInPaise,
+        currency: currency,
+        status: "pending",
+        paymentMethod: "razorpay",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+
+      console.log("SAFE DIAGNOSTIC LOG — Payment Document Saved:", {
+        bookingId: bookingId,
+        orderId: razorpayOrder.id,
+      });
+
+      // ✅ STEP 6: Return order details to frontend
+      return {
+        status: "success",
+        message: "Razorpay order created",
+        orderId: razorpayOrder.id,
+        amount: amount,
+        amountInPaise: amountInPaise,
+        currency: currency,
+        keyId: keyId, // Send to frontend for checkout
+      };
+
+    } catch (error) {
+      console.error("SAFE DIAGNOSTIC LOG — createRazorpayOrder Error:", {
+        message: error.message,
+        code: error.code,
+      });
+
+      if (error instanceof functions.https.HttpsError) {
+        throw error;
       }
 
-      // 409 Duplicate (idempotency working)
-      if (response.status === 409 && responseBody?.payment_session_id) {
-        safeStructuredLog("CASHFREE_DUPLICATE_ORDER", correlationId, {
-          orderId: payload.order_id,
-        });
-        return { response, responseBody };
-      }
-
-      // Client error - don't retry
-      if (response.status >= 400 && response.status < 500) {
-        const errorMsg =
-          responseBody?.message || `Cashfree payment gateway rejected order creation (HTTP ${response.status}).`;
-        if (response.status === 400) {
-          throw new HttpsError("invalid-argument", errorMsg);
-        } else if (response.status === 401 || response.status === 403) {
-          throw new HttpsError(
-            "permission-denied",
-            responseBody?.message
-              ? `Payment gateway authentication failed: ${responseBody.message}`
-              : "Payment gateway authentication failed."
-          );
-        } else if (response.status === 409) {
-          throw new HttpsError("already-exists", errorMsg);
-        } else if (response.status === 429) {
-          throw new HttpsError("resource-exhausted", "Payment gateway rate limit reached. Please retry.");
-        } else {
-          throw new HttpsError("invalid-argument", errorMsg);
-        }
-      }
-
-      // Server error - retry
-      lastError = new Error(
-        `Cashfree API error (HTTP ${response.status}): ${responseBody?.message || "Unknown"}`
-      );
-
-    } catch (err) {
-      lastError = err;
-      
-      if (err instanceof HttpsError || (functions?.https?.HttpsError && err instanceof functions.https.HttpsError)) {
-        throw err;
-      }
-
-      if (attempt < MAX_RETRIES - 1) {
-        const backoffMs = 500 * Math.pow(2, attempt);
-        safeStructuredLog("CASHFREE_RETRY_BACKOFF", correlationId, {
-          attempt: attempt + 1,
-          backoffMs,
-        });
-        await new Promise((r) => setTimeout(r, backoffMs));
-      }
+      throw new functions.https.HttpsError("internal", error.message || "Failed to create payment order");
     }
-  }
-
-  safeStructuredLog("CASHFREE_API_EXHAUSTED", correlationId, {
-    maxRetries: MAX_RETRIES,
-    lastError: lastError?.message,
   });
 
-  throw new HttpsError(
-    "unavailable",
-    `Payment gateway unreachable after ${MAX_RETRIES} attempts. Please try again.`
-  );
-}
-
-// ============================================================
-// 1. `createCashfreeOrder`
-// ============================================================
-
 /**
- * Generates an authoritative Cashfree order and paymentSessionId for frontend Web SDK checkout.
- * Enforces authentication, dual booking lookup, ownership verification, and authoritatively calculates amount.
- * 100% Backward compatible with shared applications.
+ * ✅ VERIFY RAZORPAY PAYMENT
+ * Called from frontend after payment completion
  */
-exports.createCashfreeOrder = onCall(
-  {
-    region: "us-central1",
-    secrets: [cashfreeAppId, cashfreeSecretKey],
-  },
-  async (request) => {
-    const data = request.data || {};
-    const context = { auth: request.auth || null, rawRequest: request.rawRequest };
-    const rawBookingId = data?.bookingId || data?.id || data?.orderId || data?.booking_id || data?.docId;
-    const bookingId = typeof rawBookingId === "string" ? rawBookingId.trim() : "";
-    const cleanBookingId = bookingId.replace(/[^a-zA-Z0-9_-]/g, "");
-    const correlationId = `corr_ord_${cleanBookingId || "unknown"}_${Date.now()}`;
-
+exports.verifyRazorpayPayment = functions
+  .region("us-central1")
+  .https.onCall(async (data, context) => {
     try {
-      // 1. Diagnostic: Booking ID received & Auth UID present
-      const authUidPresent = Boolean(context?.auth?.uid);
-      const uid = context?.auth?.uid || null;
+      // ✅ Verify authentication
+      if (!context.auth) {
+        throw new functions.https.HttpsError("unauthenticated", "User must be authenticated");
+      }
 
-      safeStructuredLog("CREATE_CASHFREE_ORDER_START", correlationId, {
-        bookingIdReceived: bookingId,
-        rawBookingId: rawBookingId || null,
-        cleanBookingId,
-        authUidPresent,
-        authUid: uid,
-        advancePercentRequested: data?.advancePercent,
+      const userId = context.auth.uid;
+      const reqData = data || {};
+
+      // ✅ Get payment data
+      const { bookingId, razorpayPaymentId, razorpayOrderId, razorpaySignature } = reqData;
+
+      if (!bookingId || !razorpayPaymentId || !razorpaySignature) {
+        throw new functions.https.HttpsError("invalid-argument", "Missing payment verification data");
+      }
+
+      console.log("SAFE DIAGNOSTIC LOG — verifyRazorpayPayment Called:", {
+        bookingId: bookingId,
+        paymentId: razorpayPaymentId,
       });
 
-      if (!authUidPresent || !uid) {
-        safeStructuredLog("AUTH_REJECTED", correlationId, {
-          reason: "Unauthenticated: context.auth or context.auth.uid missing",
-          authUidPresent: false,
-        });
-        console.error(`[${correlationId}] Auth rejected: user unauthenticated`);
-        throw new HttpsError(
-          "unauthenticated",
-          "You must be logged in to initiate payment."
-        );
+      // ✅ Get secret for verification
+      const { keySecret } = getRazorpayConfig();
+
+      if (!keySecret) {
+        throw new functions.https.HttpsError("failed-precondition", "Razorpay credentials not configured");
       }
 
-      if (!bookingId || bookingId === "undefined" || bookingId === "null") {
-        safeStructuredLog("INVALID_BOOKING_ID", correlationId, {
-          bookingIdReceived: bookingId,
+      // ✅ Create signature for verification
+      const crypto = require("crypto");
+      const shasum = crypto.createHmac("sha256", keySecret);
+      const data_to_hash = `${razorpayOrderId}|${razorpayPaymentId}`;
+      shasum.update(data_to_hash);
+      const generated_signature = shasum.digest("hex");
+
+      // ✅ Verify signature
+      if (generated_signature !== razorpaySignature) {
+        console.error("SAFE DIAGNOSTIC LOG — Signature Verification Failed:", {
+          expected: generated_signature,
+          received: razorpaySignature,
         });
-        console.error(`[${correlationId}] Invalid bookingId received: "${bookingId}"`);
-        throw new HttpsError(
-          "invalid-argument",
-          "Valid bookingId is required."
-        );
+        throw new functions.https.HttpsError("invalid-argument", "Invalid payment signature");
       }
 
-      // 2. Diagnostic: Booking lookup result
-      safeStructuredLog("BOOKING_LOOKUP_START", correlationId, {
-        bookingId,
-        uid,
+      console.log("SAFE DIAGNOSTIC LOG — Signature Verified:", {
+        bookingId: bookingId,
+        paymentId: razorpayPaymentId,
       });
 
-      let bookingDoc = null;
-      let booking = null;
-      let actualDocId = bookingId;
-      let lookupMethod = "none";
+      // ✅ Update payment status in Firestore
+      await db.collection("payments").doc(String(bookingId)).set({
+        status: "completed",
+        razorpayPaymentId: razorpayPaymentId,
+        razorpayOrderId: razorpayOrderId,
+        razorpaySignature: razorpaySignature,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
 
-      try {
-        bookingDoc = await db.collection("bookings").doc(bookingId).get();
-        if (bookingDoc.exists) {
-          booking = bookingDoc.data();
-          actualDocId = bookingDoc.id;
-          lookupMethod = "doc_id_direct";
-        } else {
-          // Fallback: Query by indexed bookingId field
-          const snap = await db
-            .collection("bookings")
-            .where("userId", "==", uid)
-            .where("bookingId", "==", bookingId)
-            .limit(1)
-            .get();
+      // ✅ Update booking status
+      const cleanBookingId = String(bookingId).trim();
+      const bookingDocRef = db.collection("bookings").doc(cleanBookingId);
+      const bookingSnap = await bookingDocRef.get();
 
-          if (!snap.empty) {
-            bookingDoc = snap.docs[0];
-            booking = bookingDoc.data();
-            actualDocId = bookingDoc.id;
-            lookupMethod = "bookingId_field_query";
-          }
-        }
-      } catch (lookupErr) {
-        safeStructuredLog("BOOKING_LOOKUP_EXCEPTION", correlationId, {
-          errorMessage: lookupErr?.message,
-          errorName: lookupErr?.name,
-          errorStack: lookupErr?.stack,
-        });
-        console.error(`[${correlationId}] Booking lookup database exception:`, lookupErr?.message, lookupErr?.stack);
-        throw new HttpsError(
-          "internal",
-          "Database error during booking lookup."
-        );
-      }
-
-      const bookingFound = Boolean(booking);
-      safeStructuredLog("BOOKING_LOOKUP_RESULT", correlationId, {
-        found: bookingFound,
-        lookupMethod,
-        docId: actualDocId,
-        bookingStatus: booking?.status || null,
-        bookingUserId: booking?.userId || null,
-      });
-
-      if (!bookingFound) {
-        console.error(`[${correlationId}] Booking not found: bookingId=${bookingId}, uid=${uid}`);
-        throw new HttpsError(
-          "not-found",
-          "Booking record was not found."
-        );
-      }
-
-      // 3. Diagnostic: Ownership check result
-      const ownershipMatch = booking.userId === uid;
-      safeStructuredLog("OWNERSHIP_CHECK_RESULT", correlationId, {
-        ownershipMatch,
-        bookingUserId: booking.userId,
-        authUid: uid,
-      });
-
-      if (!ownershipMatch) {
-        console.error(`[${correlationId}] Ownership mismatch: bookingUserId=${booking.userId}, authUid=${uid}`);
-        throw new HttpsError(
-          "permission-denied",
-          "You are not authorized to pay for this booking."
-        );
-      }
-
-      // 4. Validate booking status
-      if (booking.status === "cancelled" || booking.status === "refunded") {
-        safeStructuredLog("STATUS_INVALID", correlationId, { status: booking.status });
-        throw new HttpsError(
-          "failed-precondition",
-          "This booking has been cancelled and cannot be paid."
-        );
-      }
-
-      if (booking.status === "completed" || booking.status === "trip_completed") {
-        safeStructuredLog("STATUS_INVALID", correlationId, { status: booking.status });
-        throw new HttpsError(
-          "failed-precondition",
-          "This booking has already been completed."
-        );
-      }
-
-      const advancePercent = Number(data?.advancePercent) || booking.advancePercent || 25;
-
-      if (booking.advancePaidPercent && booking.advancePaidPercent >= advancePercent) {
-        safeStructuredLog("STATUS_ALREADY_PAID", correlationId, {
-          advancePaidPercent: booking.advancePaidPercent,
-          requestedPercent: advancePercent,
-        });
-        throw new HttpsError(
-          "failed-precondition",
-          "Advance payment for this booking has already been completed."
-        );
-      }
-
-      // 5. Diagnostic: Authoritative order amount calculation
-      let totalAmount = 0;
-      if (typeof booking.totalFare === "number" && booking.totalFare > 0) {
-        totalAmount = booking.totalFare;
-      } else if (typeof booking.totalAmount === "number" && booking.totalAmount > 0) {
-        totalAmount = booking.totalAmount;
-      } else if (typeof booking.estimatedFare === "number" && booking.estimatedFare > 0) {
-        totalAmount = booking.estimatedFare;
-      } else {
-        const fare = await computeBackendTripFare({
-          vehicleId: booking.vehicleId || booking.selectedVehicleId,
-          vehicleType: booking.vehicleType,
-          vehicleName: booking.vehicleName,
-          destinationDistanceKm: booking.routeDistanceKm ? booking.routeDistanceKm / 2 : undefined,
-          startDate: booking.requestedStartDate,
-          endDate: booking.requestedEndDate,
-          advancePercent: advancePercent,
-        });
-        totalAmount = fare.totalEstimate;
-      }
-
-      let rawPayable = 0;
-      if (typeof booking.advanceAmount === "number" && booking.advanceAmount > 0) {
-        rawPayable = booking.advanceAmount;
-      } else {
-        rawPayable = (totalAmount * advancePercent) / 100;
-      }
-
-      const orderAmount = Math.round(Number(rawPayable));
-
-      // Validate client requested amount against calculated booking amount with tolerance
-      const requestAmount = Number(data?.amount || data?.orderAmount || data?.advanceFare || 0);
-      if (requestAmount > 0 && Math.abs(requestAmount - orderAmount) > 100) {
-        throw new HttpsError(
-          "invalid-argument",
-          `Amount mismatch. Expected ₹${orderAmount}, got ₹${requestAmount}`
-        );
-      }
-
-      safeStructuredLog("ORDER_AMOUNT_CALCULATED", correlationId, {
-        totalFare: totalAmount,
-        advancePercent,
-        rawPayable,
-        orderAmount,
-        requestAmount: requestAmount || orderAmount,
-      });
-
-      if (isNaN(orderAmount) || orderAmount <= 0) {
-        console.error(`[${correlationId}] Invalid order amount calculated: ${orderAmount}`);
-        throw new HttpsError(
-          "invalid-argument",
-          "Calculated payable amount must be greater than zero."
-        );
-      }
-
-      // 6. Retrieve and strictly validate customer details
-      let customerPhone = "";
-      let customerName = "Traveler";
-      let customerEmail = "customer@zeneratrips.com";
-
-      // Priority 1: Check client parameters passed directly from checkout
-      if (data?.customerPhone || data?.customer_phone || data?.phone) {
-        customerPhone = String(data.customerPhone || data.customer_phone || data.phone).trim();
-      }
-      if (data?.customerName || data?.customer_name || data?.name) {
-        customerName = String(data.customerName || data.customer_name || data.name).trim();
-      }
-      if (data?.customerEmail || data?.customer_email || data?.email) {
-        customerEmail = String(data.customerEmail || data.customer_email || data.email).trim();
-      }
-
-      // Priority 2: Check booking document in Firestore
-      if (!customerPhone && (booking.customerPhone || booking.phoneNumber || booking.phone || booking.contactNumber)) {
-        customerPhone = String(booking.customerPhone || booking.phoneNumber || booking.phone || booking.contactNumber).trim();
-      }
-      if (customerName === "Traveler" && (booking.customerName || booking.passengerName || booking.name)) {
-        customerName = String(booking.customerName || booking.passengerName || booking.name).trim();
-      }
-      if (customerEmail === "customer@zeneratrips.com" && (booking.customerEmail || booking.email)) {
-        customerEmail = String(booking.customerEmail || booking.email).trim();
-      }
-
-      // Priority 3: Check Firestore user profile
-      try {
-        const userDoc = await db.collection("users").doc(uid).get();
-        if (userDoc.exists) {
-          const userData = userDoc.data();
-          if (!customerPhone && (userData.phone || userData.phoneNumber || userData.mobile)) {
-            customerPhone = String(userData.phone || userData.phoneNumber || userData.mobile).trim();
-          }
-          if (customerName === "Traveler" && (userData.name || userData.displayName)) {
-            customerName = String(userData.name || userData.displayName).trim();
-          }
-          if (customerEmail === "customer@zeneratrips.com" && userData.email) {
-            customerEmail = String(userData.email).trim();
-          }
-        }
-      } catch (e) {
-        safeStructuredLog("USER_PROFILE_FETCH_NOTICE", correlationId, {
-          errorMessage: e?.message,
-          errorName: e?.name,
-          errorStack: e?.stack,
-        });
-      }
-
-      // Priority 4: Check Firebase Auth Token
-      if (!customerPhone && context.auth.token && context.auth.token.phone_number) {
-        customerPhone = String(context.auth.token.phone_number).trim();
-      }
-      if (customerEmail === "customer@zeneratrips.com" && context.auth.token && context.auth.token.email) {
-        customerEmail = String(context.auth.token.email).trim();
-      }
-      if (customerName === "Traveler" && context.auth.token && context.auth.token.name) {
-        customerName = String(context.auth.token.name).trim();
-      }
-
-      const cleanPhone = sanitizeCustomerPhone(customerPhone);
-
-      // Strict validation: Require a valid 10-digit mobile number before contacting Cashfree
-      if (!cleanPhone || cleanPhone.length !== 10) {
-        safeStructuredLog("PHONE_VALIDATION_FAILED", correlationId, {
-          rawPhone: customerPhone,
-          cleanPhone,
-        });
-        throw new HttpsError(
-          "invalid-argument",
-          "A valid 10-digit Indian mobile number is required to process your payment. Please enter your mobile number in the checkout form."
-        );
-      }
-
-      // Automatically sync and persist verified customer phone back to Firestore
-      try {
-        await db.collection("users").doc(uid).set({ phone: cleanPhone }, { merge: true });
-        await db.collection("bookings").doc(cleanBookingId).set({
-          customerPhone: cleanPhone,
-          customerName,
-          customerEmail,
-        }, { merge: true });
-      } catch (cacheErr) {
-        console.warn("SAFE DIAGNOSTIC LOG — Failed to persist verified customer details:", cacheErr?.message);
-      }
-
-      const cleanCustomerId = sanitizeCustomerId(uid);
-      const orderId = `order_${cleanBookingId}_${Date.now()}`;
-      safeStructuredLog("ORDER_ID_CREATED", correlationId, { orderId, cleanPhone });
-
-      // 7. Diagnostic: Cashfree config / mode / base URL
-      const config = getCashfreeConfig();
-      const hasAppId = Boolean(config.appId);
-      const hasSecretKey = Boolean(config.secretKey);
-      const mode = config.mode;
-
-      safeStructuredLog("CASHFREE_CONFIG_CHECK", correlationId, {
-        mode,
-        baseUrl: config.baseUrl,
-        hasAppId,
-        hasSecretKey,
-        apiVersion: config.apiVersion,
-      });
-
-      if (!hasAppId || !hasSecretKey) {
-        safeStructuredLog("CASHFREE_CONFIG_MISSING", correlationId, {
-          hasAppId,
-          hasSecretKey,
-          mode,
-        });
-        console.error(`[${correlationId}] Cashfree credentials missing: hasAppId=${hasAppId}, hasSecretKey=${hasSecretKey}`);
-        throw new HttpsError(
-          "failed-precondition",
-          "Payment gateway credentials are not configured. Please set CASHFREE_APP_ID and CASHFREE_SECRET_KEY in functions/.env."
-        );
-      }
-
-      const returnUrl =
-        data?.returnUrl ||
-        data?.return_url ||
-        `https://zenera-trips.web.app/checkout/${cleanBookingId}?order_id={order_id}`;
-
-      const cashfreePayload = {
-        order_id: orderId,
-        order_amount: orderAmount,
-        order_currency: "INR",
-        customer_details: {
-          customer_id: cleanCustomerId,
-          customer_phone: cleanPhone,
-          customer_name: customerName,
-          customer_email: customerEmail,
-        },
-        order_meta: {
-          return_url: returnUrl,
-        },
-        order_note: `Zenera Trips Booking #${cleanBookingId}`,
-      };
-
-      safeStructuredLog("CASHFREE_ORDER_REQUEST", correlationId, {
-        endpoint: `${config.baseUrl}/orders`,
-        mode,
-        baseUrl: config.baseUrl,
-        orderId,
-        orderAmount,
-        currency: "INR",
-      });
-
-      let cashfreeResponse = null;
-      try {
-        const { response, responseBody } = await callCashfreeCreateOrderWithRetry(
-          config,
-          cashfreePayload,
-          correlationId
-        );
-        cashfreeResponse = responseBody;
-      } catch (apiErr) {
-        if (apiErr instanceof HttpsError || (functions?.https?.HttpsError && apiErr instanceof functions.https.HttpsError)) {
-          throw apiErr;
-        }
-        // 9. Diagnostic: Caught exception message & stack location
-        safeStructuredLog("CASHFREE_FETCH_EXCEPTION", correlationId, {
-          errorMessage: apiErr?.message,
-          errorName: apiErr?.name,
-          errorStack: apiErr?.stack,
-        });
-        console.error(`[${correlationId}] Cashfree fetch exception (${config.baseUrl}/orders):`, apiErr?.message, apiErr?.stack);
-        throw new HttpsError(
-          "unavailable",
-          `Payment gateway network unreachable: ${apiErr?.message || "Please try again."}`
-        );
-      }
-
-      const paymentSessionId = cashfreeResponse.payment_session_id;
-      safeStructuredLog("PAYMENT_SESSION_CREATED", correlationId, {
-        orderId,
-        hasSessionId: Boolean(paymentSessionId),
-        mode,
-      });
-
-      // Record payment intent in Firestore `payments` collection
-      try {
-        await db.collection("payments").add({
-          userId: uid,
-          bookingId: cleanBookingId,
-          docId: actualDocId,
-          orderId: orderId,
-          paymentSessionId: paymentSessionId,
-          amount: orderAmount,
-          currency: "INR",
-          advancePercent: advancePercent,
-          status: "pending",
-          type: "advance",
-          gateway: "cashfree",
-          environment: mode,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      if (bookingSnap.exists) {
+        await bookingDocRef.update({
+          status: "confirmed",
+          paymentStatus: "completed",
+          paymentMethod: "razorpay",
+          paymentId: razorpayPaymentId,
+          confirmedAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
-      } catch (dbErr) {
-        safeStructuredLog("PAYMENT_RECORD_ERROR", correlationId, {
-          errorMessage: dbErr?.message,
-          errorName: dbErr?.name,
-          errorStack: dbErr?.stack,
-        });
-        console.warn("SAFE DIAGNOSTIC LOG — payment record warning:", dbErr?.message);
+      } else {
+        const altQuery = await db.collection("bookings").where("bookingId", "==", cleanBookingId).limit(1).get();
+        if (!altQuery.empty) {
+          await altQuery.docs[0].ref.update({
+            status: "confirmed",
+            paymentStatus: "completed",
+            paymentMethod: "razorpay",
+            paymentId: razorpayPaymentId,
+            confirmedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
       }
+
+      console.log("SAFE DIAGNOSTIC LOG — Payment Verified & Saved:", {
+        bookingId: bookingId,
+        status: "completed",
+      });
 
       return {
-        orderId,
-        paymentSessionId,
-        orderAmount,
-        order_id: orderId,
-        payment_session_id: paymentSessionId,
-        order_amount: orderAmount,
-        environment: mode,
-        mode,
+        status: "success",
+        message: "Payment verified successfully",
+        bookingId: bookingId,
       };
-    } catch (outerErr) {
-      // Top-level catch: guarantees sanitized logging for all unexpected exceptions
-      safeStructuredLog("CREATE_CASHFREE_ORDER_UNHANDLED_EXCEPTION", correlationId, {
-        errorName: outerErr?.name,
-        errorMessage: outerErr?.message,
-        errorCode: outerErr?.code,
-        errorStack: outerErr?.stack,
+
+    } catch (error) {
+      console.error("SAFE DIAGNOSTIC LOG — verifyRazorpayPayment Error:", {
+        message: error.message,
       });
-      console.error(`[${correlationId}] createCashfreeOrder unhandled exception:`, outerErr?.message, outerErr?.stack);
 
-      if (outerErr instanceof HttpsError || (functions?.https?.HttpsError && outerErr instanceof functions.https.HttpsError)) {
-        throw outerErr;
+      if (error instanceof functions.https.HttpsError) {
+        throw error;
       }
-      throw new HttpsError(
-        "internal",
-        outerErr?.message || "Internal server error occurred during order creation."
-      );
-    }
-  }
-);
 
-// ============================================================
-// 2. `getPaymentStatus`
-// ============================================================
+      throw new functions.https.HttpsError("internal", error.message || "Payment verification failed");
+    }
+  });
 
 /**
- * Polls / verifies transaction outcome with Cashfree and updates Firestore status to 'confirmed'.
- * 100% Backward compatible with shared applications.
+ * Compatibility getPaymentStatus for client checks
  */
 exports.getPaymentStatus = onCall(
   {
     region: "us-central1",
-    secrets: [cashfreeAppId, cashfreeSecretKey],
   },
   async (request) => {
-    const data = request.data || {};
-    const context = { auth: request.auth || null, rawRequest: request.rawRequest };
-
-    if (!context.auth || !context.auth.uid) {
-      throw new HttpsError(
-        "unauthenticated",
-        "You must be logged in to verify payment status."
-      );
+    if (!request.auth || !request.auth.uid) {
+      throw new HttpsError("unauthenticated", "Must be logged in.");
     }
-
-    const uid = context.auth.uid;
-    const rawBookingId = data?.bookingId || data?.id || data?.orderId || data?.docId;
-    const bookingId = typeof rawBookingId === "string" ? rawBookingId.trim() : "";
-    const cleanBookingId = bookingId.replace(/[^a-zA-Z0-9_-]/g, "");
-    const correlationId = `corr_ver_${cleanBookingId || "unknown"}_${Date.now()}`;
-
-    safeStructuredLog("PAYMENT_VERIFICATION", correlationId, { bookingId, uid });
-
+    const bookingId = request.data?.bookingId;
     if (!bookingId) {
-      throw new HttpsError(
-        "invalid-argument",
-        "bookingId is required."
-      );
+      throw new HttpsError("invalid-argument", "bookingId is required");
     }
 
-    // 1. Fetch booking (Dual lookup: docId, then bookingId field)
-    let bookingDoc = await db.collection("bookings").doc(bookingId).get();
-    let booking = null;
-    let actualDocId = bookingId;
-
+    const bookingDoc = await db.collection("bookings").doc(String(bookingId)).get();
     if (bookingDoc.exists) {
-      booking = bookingDoc.data();
-      actualDocId = bookingDoc.id;
-    } else {
-      const snap = await db
-        .collection("bookings")
-        .where("userId", "==", uid)
-        .where("bookingId", "==", bookingId)
-        .limit(1)
-        .get();
-
-      if (!snap.empty) {
-        bookingDoc = snap.docs[0];
-        booking = bookingDoc.data();
-        actualDocId = bookingDoc.id;
-      }
-    }
-
-    if (!booking) {
-      throw new HttpsError("not-found", "Booking not found.");
-    }
-    if (booking.userId !== uid) {
-      throw new HttpsError(
-        "permission-denied",
-        "Access to booking denied."
-      );
-    }
-
-    // If already marked confirmed in Firestore, return immediately
-    if (booking.status === "confirmed" && booking.advancePaidPercent > 0) {
+      const data = bookingDoc.data();
       return {
-        bookingStatus: "confirmed",
-        status: "confirmed",
-        totalPaidPercent: booking.advancePaidPercent,
-        advancePaidPercent: booking.advancePaidPercent,
-        paymentDetails: {
-          paymentStatus: "SUCCESS",
-        },
+        bookingStatus: data.status || "pending",
+        status: data.status || "pending",
+        totalPaidPercent: data.status === "confirmed" ? (data.advancePercent || 25) : 0,
       };
     }
-
-    // 2. Query recent payment records for this booking and sort chronologically
-    let paymentsSnap = await db
-      .collection("payments")
-      .where("bookingId", "==", cleanBookingId)
-      .where("userId", "==", uid)
-      .get();
-
-    if (paymentsSnap.empty && actualDocId !== cleanBookingId) {
-      paymentsSnap = await db
-        .collection("payments")
-        .where("docId", "==", actualDocId)
-        .where("userId", "==", uid)
-        .get();
-    }
-
-    if (paymentsSnap.empty && booking.bookingId && booking.bookingId !== cleanBookingId) {
-      paymentsSnap = await db
-        .collection("payments")
-        .where("bookingId", "==", booking.bookingId)
-        .where("userId", "==", uid)
-        .get();
-    }
-
-    let latestOrder = null;
-    paymentsSnap.forEach((docSnap) => {
-      const p = docSnap.data();
-      const getMs = (val) => {
-        if (!val) return 0;
-        if (typeof val.toMillis === "function") return val.toMillis();
-        if (typeof val.seconds === "number") return val.seconds * 1000;
-        return new Date(val).getTime() || 0;
-      };
-      if (!latestOrder || getMs(p.createdAt) > getMs(latestOrder.createdAt)) {
-        latestOrder = { ...p, id: docSnap.id };
-      }
-    });
-
-    const config = getCashfreeConfig();
-
-    if (latestOrder && latestOrder.orderId && config.appId && config.secretKey) {
-      try {
-        const cfRes = await fetch(`${config.baseUrl}/orders/${latestOrder.orderId}`, {
-          headers: {
-            "x-api-version": config.apiVersion,
-            "x-client-id": config.appId,
-            "x-client-secret": config.secretKey,
-          },
-        });
-
-        if (cfRes.ok) {
-          const cfData = await cfRes.json();
-          let isPaid =
-            cfData.order_status === "PAID" ||
-            (typeof cfData.order_amount_paid === "number" && cfData.order_amount_paid > 0);
-
-          // Fallback: Check payments attempt list if order status is still ACTIVE
-          if (!isPaid && cfData.order_status === "ACTIVE") {
-            try {
-              const paymentsRes = await fetch(
-                `${config.baseUrl}/orders/${latestOrder.orderId}/payments`,
-                {
-                  headers: {
-                    "x-api-version": config.apiVersion,
-                    "x-client-id": config.appId,
-                    "x-client-secret": config.secretKey,
-                  },
-                }
-              );
-              if (paymentsRes.ok) {
-                const paymentsList = await paymentsRes.json();
-                if (Array.isArray(paymentsList)) {
-                  const hasSuccess = paymentsList.some(
-                    (item) => item.payment_status === "SUCCESS"
-                  );
-                  if (hasSuccess) isPaid = true;
-                }
-              }
-            } catch (pErr) {
-              console.warn("SAFE DIAGNOSTIC LOG — payment list check notice:", pErr?.message);
-            }
-          }
-
-          safeStructuredLog("CASHFREE_STATUS_CHECK", correlationId, {
-            endpoint: `${config.baseUrl}/orders/${latestOrder.orderId}`,
-            mode: config.mode,
-            orderId: latestOrder.orderId,
-            httpStatus: cfRes.status,
-            orderStatus: cfData?.order_status,
-            orderAmountPaid: cfData?.order_amount_paid,
-            isPaid,
-          });
-
-          if (isPaid) {
-            // Update booking to confirmed in Firestore
-            await db.collection("bookings").doc(actualDocId).update({
-              status: "confirmed",
-              advancePaidPercent: latestOrder.advancePercent || 25,
-              paidAmount: latestOrder.amount || cfData.order_amount_paid || 0,
-              confirmedAt: admin.firestore.FieldValue.serverTimestamp(),
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            });
-
-            // Update payment record to success
-            if (latestOrder.id) {
-              await db.collection("payments").doc(latestOrder.id).update({
-                status: "success",
-                cfOrderStatus: cfData.order_status,
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-              });
-            }
-
-            safeStructuredLog("BOOKING_CONFIRMED", correlationId, {
-              docId: actualDocId,
-              orderId: latestOrder.orderId,
-              mode: config.mode,
-            });
-
-            return {
-              bookingStatus: "confirmed",
-              status: "confirmed",
-              totalPaidPercent: latestOrder.advancePercent || 25,
-              advancePaidPercent: latestOrder.advancePercent || 25,
-              paymentDetails: {
-                orderId: latestOrder.orderId,
-                paymentStatus: "SUCCESS",
-              },
-            };
-          } else if (cfData.order_status === "FAILED" || cfData.order_status === "CANCELLED" || cfData.order_status === "USER_DROPPED") {
-            if (latestOrder.id) {
-              await db.collection("payments").doc(latestOrder.id).update({
-                status: cfData.order_status === "FAILED" ? "failed" : "cancelled",
-                cfOrderStatus: cfData.order_status,
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-              });
-            }
-          }
-        }
-      } catch (e) {
-        console.warn("SAFE DIAGNOSTIC LOG — Cashfree status fetch notice:", e?.message);
-      }
-    }
-
-    const currentStatus = booking.status || "pending";
-    const currentPaidPercent = booking.advancePaidPercent || 0;
-
-    return {
-      bookingStatus: currentStatus,
-      status: currentStatus,
-      totalPaidPercent: currentPaidPercent,
-      advancePaidPercent: currentPaidPercent,
-      paymentDetails: {},
-    };
+    return { bookingStatus: "pending", status: "pending", totalPaidPercent: 0 };
   }
 );
 
@@ -2117,21 +1554,20 @@ exports.getPaymentStatus = onCall(
 // 3. `createBooking`
 // ============================================================
 
-/**
- * Creates an authoritative trip booking in Firestore with verified server pricing ledger.
- * 100% Backward compatible with shared applications.
- */
-exports.createBooking = functions
-  .region("us-central1")
-  .https.onCall(async (data, context) => {
-    if (!context.auth || !context.auth.uid) {
-      throw new functions.https.HttpsError(
+exports.createBooking = onCall(
+  {
+    region: "us-central1",
+  },
+  async (request) => {
+    if (!request.auth || !request.auth.uid) {
+      throw new HttpsError(
         "unauthenticated",
         "You must be logged in to create a booking."
       );
     }
 
-    const uid = context.auth.uid;
+    const uid = request.auth.uid;
+    const data = request.data || {};
     const vehicleType = data?.vehicleType || "Sedan";
     const startLocation = data?.startLocation || data?.pickupLocation || "Bangalore";
     const majorDestinations = Array.isArray(data?.majorDestinations) ? data.majorDestinations : [];
@@ -2150,7 +1586,7 @@ exports.createBooking = functions
             route: primaryRouteWaypoints,
             reason: check.reason,
           });
-          throw new functions.https.HttpsError(
+          throw new HttpsError(
             "invalid-argument",
             check.reason || `Stop "${stopName}" is too far from your selected route. Please choose a nearby stop or a location along your trip.`
           );
@@ -2240,7 +1676,7 @@ exports.createBooking = functions
 
     // Strict Validation (Requirement 7 & 8): Verify every orderedItinerary item has valid numeric distanceKm
     if (!Array.isArray(newBooking.orderedItinerary) || newBooking.orderedItinerary.length === 0) {
-      throw new functions.https.HttpsError(
+      throw new HttpsError(
         "invalid-argument",
         "Booking validation failed: orderedItinerary must be a non-empty array."
       );
@@ -2258,7 +1694,7 @@ exports.createBooking = functions
         typeof pt.distanceKm !== "number" ||
         !Number.isFinite(pt.distanceKm)
       ) {
-        throw new functions.https.HttpsError(
+        throw new HttpsError(
           "invalid-argument",
           `Booking validation failed: orderedItinerary[${idx}] (${pt?.name || "unknown"}) has an invalid or undefined distanceKm (${pt?.distanceKm}). All itinerary items must have valid numeric distanceKm.`
         );
@@ -2304,15 +1740,19 @@ exports.createBooking = functions
       orderedItinerary: fare.orderedItinerary,
       createdAt: new Date().toISOString(),
     };
-  });
+  }
+);
 
 // ============================================================
 // 4. `estimateTripCost`
 // ============================================================
 
-exports.estimateTripCost = functions
-  .region("us-central1")
-  .https.onCall(async (data, context) => {
+exports.estimateTripCost = onCall(
+  {
+    region: "us-central1",
+  },
+  async (request) => {
+    const data = request.data || {};
     const fare = await computeBackendTripFare({
       vehicleId: data?.vehicleId,
       vehicleType: data?.vehicleType,
@@ -2405,24 +1845,26 @@ exports.estimateTripCost = functions
       routeLegs: fare.legs,
       orderedItinerary: fare.orderedItinerary,
     };
-  });
-
+  }
+);
 
 // ============================================================
 // 5. `getBookingsByUser`
 // ============================================================
 
-exports.getBookingsByUser = functions
-  .region("us-central1")
-  .https.onCall(async (data, context) => {
-    if (!context.auth || !context.auth.uid) {
-      throw new functions.https.HttpsError(
+exports.getBookingsByUser = onCall(
+  {
+    region: "us-central1",
+  },
+  async (request) => {
+    if (!request.auth || !request.auth.uid) {
+      throw new HttpsError(
         "unauthenticated",
         "You must be logged in to fetch bookings."
       );
     }
 
-    const uid = context.auth.uid;
+    const uid = request.auth.uid;
     const snapshot = await db
       .collection("bookings")
       .where("userId", "==", uid)
@@ -2438,7 +1880,8 @@ exports.getBookingsByUser = functions
     });
 
     return { bookings };
-  });
+  }
+);
 
 // ============================================================
 // 6. `getFleetPricing`
@@ -2448,21 +1891,23 @@ exports.getBookingsByUser = functions
  * Authoritative fleet pricing endpoint for web and mobile clients.
  * Reads pricing_rules from Firestore and returns normalized fleet data with fallback.
  */
-exports.getFleetPricing = functions
-  .region("us-central1")
-  .https.onCall(async (data, context) => {
+exports.getFleetPricing = onCall(
+  {
+    region: "us-central1",
+  },
+  async (request) => {
     // CORS is automatic for onCall functions
     // But we need proper error handling and fallback
     try {
       // Check if user is authenticated
-      if (!context.auth) {
-        throw new functions.https.HttpsError(
+      if (!request.auth) {
+        throw new HttpsError(
           "unauthenticated",
           "You must be logged in to view pricing"
         );
       }
 
-      const userId = context.auth.uid;
+      const userId = request.auth.uid;
       let fleetPrices = [];
 
       // Try to get from Firestore first
@@ -2510,7 +1955,7 @@ exports.getFleetPricing = functions
       const resultFleets = validFleets.length > 0 ? validFleets : fleetPrices;
 
       if (resultFleets.length === 0) {
-        throw new functions.https.HttpsError(
+        throw new HttpsError(
           "not-found",
           "No fleet pricing information available"
         );
@@ -2529,336 +1974,35 @@ exports.getFleetPricing = functions
     } catch (error) {
       console.error("SAFE DIAGNOSTIC LOG — getFleetPricing error:", error);
 
-      safeStructuredLog("GET_FLEET_PRICING_ERROR", context.auth?.uid || "unknown", {
+      safeStructuredLog("GET_FLEET_PRICING_ERROR", request.auth?.uid || "unknown", {
         errorMessage: error?.message,
         errorCode: error?.code,
       });
 
       // Return error in proper format
-      if (error instanceof functions.https.HttpsError) {
+      if (error instanceof HttpsError) {
         throw error;
       }
 
-      throw new functions.https.HttpsError(
+      throw new HttpsError(
         "internal",
         error.message || "Failed to fetch fleet pricing. Using fallback data."
       );
-    }
-  });
-
-
-/**
-* Cashfree Webhook Handler
-* Receives payment notifications from Cashfree
-* Endpoint: https://zenera-trips.firebaseapp.com/api/webhook/cashfree
-* Must be registered in Cashfree Dashboard → Settings → Webhooks
-*/
-
-/**
- * Cashfree Webhook Signature Verification (Cashfree PG Standard)
- * Computes HMAC-SHA256 over `${timestamp}${rawBody}` and performs timing-safe comparison.
- */
-function verifyCashfreeWebhook(rawBody, timestamp, signature, secretKey) {
-  if (!rawBody || !timestamp || !signature || !secretKey) {
-    return false;
-  }
-  try {
-    const crypto = require("crypto");
-    const payloadToSign = `${timestamp}${rawBody}`;
-    const expectedSignature = crypto
-      .createHmac("sha256", secretKey)
-      .update(payloadToSign)
-      .digest("base64");
-
-    const expectedBuffer = Buffer.from(expectedSignature, "utf8");
-    const signatureBuffer = Buffer.from(signature, "utf8");
-
-    if (expectedBuffer.length !== signatureBuffer.length) {
-      return false;
-    }
-    return crypto.timingSafeEqual(expectedBuffer, signatureBuffer);
-  } catch (err) {
-    console.error("SAFE DIAGNOSTIC LOG — Error during webhook signature verification:", err?.message);
-    return false;
-  }
-}
-
-/**
- * Cashfree Webhook Handler (Firebase Functions v2 HTTPS Request)
- * Receives asynchronous payment status notifications from Cashfree Payment Gateway.
- * Endpoint: /api/webhook/cashfree
- */
-exports.cashfreeWebhookHandler = onRequest(
-  {
-    region: "us-central1",
-    secrets: [cashfreeAppId, cashfreeSecretKey],
-  },
-  async (req, res) => {
-    // 1. Verify request method
-    if (req.method !== "POST") {
-      return res.status(405).json({ error: "Method not allowed. Only POST is supported." });
-    }
-
-    try {
-      // 2. Read signature and timestamp headers from Cashfree
-      const signature =
-        req.headers["x-webhook-signature"] ||
-        req.headers["x-cf-signature"] ||
-        req.headers["x-cashfree-signature"] ||
-        "";
-
-      const timestamp =
-        req.headers["x-webhook-timestamp"] ||
-        req.headers["x-cf-timestamp"] ||
-        "";
-
-      if (!signature || !timestamp) {
-        console.error("SAFE DIAGNOSTIC LOG — Webhook missing signature or timestamp headers");
-        return res.status(401).json({ error: "Missing webhook signature or timestamp headers" });
-      }
-
-      // 3. Obtain secret key from Secret Manager or environment
-      const config = getCashfreeConfig();
-      const secretKey = config.secretKey;
-
-      if (!secretKey) {
-        console.error("SAFE DIAGNOSTIC LOG — Cashfree secret key not configured on server");
-        return res.status(500).json({ error: "Payment gateway credentials not configured on server" });
-      }
-
-      // 4. Verify against exact raw request body (avoiding re-stringified JSON)
-      const rawBody = req.rawBody
-        ? req.rawBody.toString("utf8")
-        : (typeof req.body === "string" ? req.body : JSON.stringify(req.body));
-
-      const isValid = verifyCashfreeWebhook(rawBody, timestamp, signature, secretKey);
-      if (!isValid) {
-        console.error("SAFE DIAGNOSTIC LOG — Webhook signature verification failed");
-        return res.status(401).json({ error: "Invalid webhook signature" });
-      }
-
-      // 5. Safely parse JSON event body
-      let event = req.body;
-      if (typeof event === "string") {
-        try {
-          event = JSON.parse(event);
-        } catch (parseErr) {
-          console.error("SAFE DIAGNOSTIC LOG — Webhook invalid JSON payload:", parseErr?.message);
-          return res.status(400).json({ error: "Invalid JSON payload" });
-        }
-      }
-
-      const eventType = String(event.type || event.event_type || "").toUpperCase();
-      const data = event.data || event;
-      const orderId =
-        data?.order?.order_id ||
-        data?.order_id ||
-        event?.order_id ||
-        data?.order?.orderId ||
-        data?.orderId ||
-        "";
-
-      const paymentStatus = String(
-        data?.payment?.payment_status ||
-        data?.order_status ||
-        data?.payment_status ||
-        ""
-      ).toUpperCase();
-
-      const orderAmountPaid =
-        data?.payment?.payment_amount ??
-        data?.order_amount_paid ??
-        data?.order_amount ??
-        0;
-
-      const isSuccess =
-        eventType.includes("PAYMENT_SUCCESS") ||
-        eventType.includes("PAYMENT_USER_DROPPED_SUCCESS") ||
-        paymentStatus === "SUCCESS" ||
-        paymentStatus === "PAID";
-
-      const isFailed =
-        eventType.includes("PAYMENT_FAILED") ||
-        paymentStatus === "FAILED" ||
-        paymentStatus === "CANCELLED" ||
-        paymentStatus === "USER_DROPPED";
-
-      safeStructuredLog("CASHFREE_WEBHOOK_RECEIVED", `webhook_${orderId || "unknown"}`, {
-        eventType,
-        orderId,
-        paymentStatus,
-        orderAmountPaid,
-        timestamp,
-      });
-
-      // 6. Handle payment success event
-      if (isSuccess && orderId) {
-        // Direct lookup in bookings collection by orderId
-        const bookingsSnap = await db
-          .collection("bookings")
-          .where("orderId", "==", orderId)
-          .limit(1)
-          .get();
-
-        if (!bookingsSnap.empty) {
-          const bookingDoc = bookingsSnap.docs[0];
-          const bookingId = bookingDoc.id;
-          const booking = bookingDoc.data();
-
-          await db.collection("bookings").doc(bookingId).update({
-            status: "confirmed",
-            advancePaidPercent: booking.advancePercent || 25,
-            paidAmount: Number(orderAmountPaid) || booking.advanceAmount || 0,
-            confirmedAt: admin.firestore.FieldValue.serverTimestamp(),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
-
-          // Also update matching payment record
-          const paymentsSnap = await db
-            .collection("payments")
-            .where("orderId", "==", orderId)
-            .limit(1)
-            .get();
-
-          if (!paymentsSnap.empty) {
-            await db.collection("payments").doc(paymentsSnap.docs[0].id).update({
-              status: "success",
-              cfOrderStatus: "PAID",
-              webhookConfirmedAt: admin.firestore.FieldValue.serverTimestamp(),
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            });
-          }
-
-          safeStructuredLog("WEBHOOK_BOOKING_CONFIRMED", `webhook_${orderId}`, {
-            orderId,
-            bookingId,
-            amountPaid: orderAmountPaid,
-          });
-
-          return res.status(200).json({ status: "ok", confirmed: true, bookingId });
-        }
-
-        // Fallback: Lookup in payments collection
-        const altSnap = await db
-          .collection("payments")
-          .where("orderId", "==", orderId)
-          .limit(1)
-          .get();
-
-        if (!altSnap.empty) {
-          const paymentDoc = altSnap.docs[0];
-          const payment = paymentDoc.data();
-
-          // CRITICAL: Update booking using payment.docId first, falling back to payment.bookingId
-          const targetBookingDocId = payment.docId || payment.bookingId;
-
-          if (targetBookingDocId) {
-            let bookingDocRef = db.collection("bookings").doc(targetBookingDocId);
-            let targetDocSnap = await bookingDocRef.get();
-
-            if (!targetDocSnap.exists && payment.bookingId && payment.bookingId !== targetBookingDocId) {
-              const bSnap = await db
-                .collection("bookings")
-                .where("bookingId", "==", payment.bookingId)
-                .limit(1)
-                .get();
-
-              if (!bSnap.empty) {
-                bookingDocRef = db.collection("bookings").doc(bSnap.docs[0].id);
-                targetDocSnap = bSnap.docs[0];
-              }
-            }
-
-            if (targetDocSnap.exists) {
-              await bookingDocRef.update({
-                status: "confirmed",
-                advancePaidPercent: payment.advancePercent || 25,
-                paidAmount: Number(orderAmountPaid) || payment.amount || 0,
-                confirmedAt: admin.firestore.FieldValue.serverTimestamp(),
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-              });
-            }
-
-            // Update payment record to success
-            await db.collection("payments").doc(paymentDoc.id).update({
-              status: "success",
-              cfOrderStatus: "PAID",
-              webhookConfirmedAt: admin.firestore.FieldValue.serverTimestamp(),
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            });
-
-            safeStructuredLog("WEBHOOK_BOOKING_CONFIRMED_VIA_PAYMENTS", `webhook_${orderId}`, {
-              orderId,
-              targetBookingDocId,
-              paymentDocId: paymentDoc.id,
-            });
-
-            return res.status(200).json({ status: "ok", confirmed: true, bookingDocId: targetBookingDocId });
-          }
-        }
-
-        safeStructuredLog("WEBHOOK_ORDER_NOT_FOUND", `webhook_${orderId}`, { orderId });
-        return res.status(200).json({ status: "ok", note: "Order not found, will be verified on client polling" });
-      }
-
-      // 7. Handle payment failure event
-      if (isFailed && orderId) {
-        const paymentsSnap = await db
-          .collection("payments")
-          .where("orderId", "==", orderId)
-          .limit(1)
-          .get();
-
-        if (!paymentsSnap.empty) {
-          await db.collection("payments").doc(paymentsSnap.docs[0].id).update({
-            status: "failed",
-            cfOrderStatus: paymentStatus || "FAILED",
-            failureReason: data?.payment?.payment_message || data?.failure_reason || "Payment failed",
-            webhookFailedAt: admin.firestore.FieldValue.serverTimestamp(),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
-        }
-
-        safeStructuredLog("WEBHOOK_PAYMENT_FAILED", `webhook_${orderId}`, {
-          orderId,
-          reason: data?.payment?.payment_message || data?.failure_reason,
-        });
-
-        return res.status(200).json({ status: "ok", confirmed: false });
-      }
-
-      // 8. Other webhook events
-      safeStructuredLog("WEBHOOK_EVENT_ACKNOWLEDGED", `webhook_${orderId || "event"}`, {
-        eventType,
-        orderId,
-      });
-
-      return res.status(200).json({ status: "ok", note: "Event acknowledged" });
-
-    } catch (err) {
-      console.error("SAFE DIAGNOSTIC LOG — Webhook handler error:", err);
-      safeStructuredLog("WEBHOOK_HANDLER_ERROR", "webhook_error", {
-        errorMessage: err?.message,
-        errorStack: err?.stack,
-      });
-
-      // Always return 200 to Cashfree (to prevent unnecessary retry loops)
-      return res.status(200).json({ status: "error", message: err?.message });
     }
   }
 );
 
 /**
- * Fix missing user document fields
- * Adds isDriver and isAdmin fields to all user documents
- * Call once from browser console to fix all users at once
+ * Fix missing user fields batch utility
  */
-exports.fixMissingUserFields = functions
-  .region("us-central1")
-  .https.onCall(async (data, context) => {
+exports.fixMissingUserFields = onCall(
+  {
+    region: "us-central1",
+  },
+  async (request) => {
     // Require authentication
-    if (!context.auth) {
-      throw new functions.https.HttpsError(
+    if (!request.auth) {
+      throw new HttpsError(
         "unauthenticated",
         "Must be logged in"
       );
@@ -2904,7 +2048,7 @@ exports.fixMissingUserFields = functions
       // Commit batch
       await batch.commit();
 
-      safeStructuredLog("FIXED_USER_FIELDS", context.auth.uid, {
+      safeStructuredLog("FIXED_USER_FIELDS", request.auth.uid, {
         usersProcessed: snapshot.size,
         fieldsAdded: updateCount,
       });
@@ -2917,9 +2061,10 @@ exports.fixMissingUserFields = functions
     } catch (error) {
       console.error("SAFE DIAGNOSTIC LOG — fixMissingUserFields error:", error);
 
-      throw new functions.https.HttpsError(
+      throw new HttpsError(
         "internal",
         error.message || "Failed to fix user documents"
       );
     }
-  });
+  }
+);

@@ -32,7 +32,7 @@ export default function CancellationTimeline({ booking }) {
     {
       label: "Refund Processing",
       time: activeStep >= 2 ? "Gateway Triggered" : "1–3 Business Days",
-      desc: "Direct Cashfree reverse transfer",
+      desc: "Direct Razorpay reverse transfer",
     },
     {
       label: "Refund Completed",

@@ -36,6 +36,8 @@ export interface SanitizedBooking {
   minimumBillableKm?: number;
   requestedStartDate: any;
   requestedEndDate: any;
+  time?: string;
+  tripTime?: string;
   status: string;
   tripDays?: number;
   advancePaidPercent?: number;
@@ -176,6 +178,8 @@ export interface CreateBookingParams {
   requestedEndDate: string | Date;
   startDate?: string | Date;
   endDate?: string | Date;
+  time?: string;
+  tripTime?: string;
   totalAmount?: number;
   estimatedFare?: number;
   totalFare?: number;
@@ -206,10 +210,11 @@ export interface CreateBookingResult {
   error?: string | null;
 }
 
-export interface CreateCashfreeOrderParams {
+export interface CreateRazorpayOrderParams {
   bookingId: string;
-  advancePercent: number;
-  amount?: number;
+  amount: number;
+  currency?: string;
+  advancePercent?: number;
   totalFare?: number;
   advanceFare?: number;
   customerPhone?: string;
@@ -220,11 +225,28 @@ export interface CreateCashfreeOrderParams {
   email?: string;
 }
 
-export interface CreateCashfreeOrderResult {
+export interface CreateRazorpayOrderResult {
+  status?: string;
+  message?: string;
   orderId?: string;
-  paymentSessionId?: string;
-  orderAmount?: number;
-  environment?: "sandbox" | "production";
+  amount?: number;
+  amountInPaise?: number;
+  currency?: string;
+  keyId?: string;
+  error?: string | null;
+}
+
+export interface VerifyRazorpayPaymentParams {
+  bookingId: string;
+  razorpayPaymentId: string;
+  razorpayOrderId: string;
+  razorpaySignature: string;
+}
+
+export interface VerifyRazorpayPaymentResult {
+  status?: string;
+  message?: string;
+  bookingId?: string;
   error?: string | null;
 }
 

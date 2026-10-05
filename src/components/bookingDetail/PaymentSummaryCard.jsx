@@ -106,7 +106,7 @@ export default function PaymentSummaryCard({ booking, payments = [], paymentsLoa
             ₹{totalAmountPaid.toLocaleString("en-IN")}
           </div>
           <span className="text-[11px] text-emerald-600/70 dark:text-emerald-400/70 block mt-1">
-            Verified online via Cashfree
+            Verified online via Razorpay
           </span>
         </div>
 

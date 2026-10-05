@@ -2,8 +2,8 @@ export default function RefundMethodCard({ booking, payments = [] }) {
   if (!booking) return null;
 
   const latestPayment = payments[0] || null;
-  const paymentMethod = latestPayment?.method || "Original Payment Source (Cashfree Online)";
-  const refCode = latestPayment?.id || booking.paymentSessionId || booking.orderId || `CF-${(booking.bookingId || booking.id || "123456").slice(-8).toUpperCase()}`;
+  const paymentMethod = latestPayment?.method || "Original Payment Source (Razorpay Online)";
+  const refCode = latestPayment?.id || booking.razorpayPaymentId || booking.razorpayOrderId || booking.paymentSessionId || booking.orderId || `RZP-${(booking.bookingId || booking.id || "123456").slice(-8).toUpperCase()}`;
 
   return (
     <div className="rounded-3xl border border-[#E2E8F0] dark:border-[#1E2E42] bg-white dark:bg-[#0E1A29] p-5 sm:p-6 shadow-sm space-y-3">

@@ -26,7 +26,7 @@ export default function CheckoutStatusModal({
                 Verifying Payment...
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Please wait while we verify your transaction with Cashfree Payments.
+                Please wait while we verify your transaction with Razorpay.
               </p>
             </div>
           </div>

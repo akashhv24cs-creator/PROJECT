@@ -40,7 +40,7 @@ const FEATURES = [
   {
     id: "secure-payments",
     title: "Secure Payments",
-    desc: "Reserve with a 25% booking advance. Complete payment safely via Cashfree and UPI.",
+    desc: "Reserve with a 25% booking advance. Complete payment safely via Razorpay and UPI.",
     icon: (
       <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />

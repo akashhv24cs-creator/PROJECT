@@ -14,7 +14,7 @@ import { getFunctions, connectFunctionsEmulator, type Functions } from "firebase
  * See: https://firebase.google.com/docs/projects/api-keys
  * "API keys for Firebase services are not secret"
  *
- * Secret credentials (Cashfree App ID, Secret Key) are managed exclusively
+ * Secret credentials (Razorpay Key ID, Key Secret) are managed exclusively
  * via Firebase Secret Manager on the backend and never appear here.
  */
 const firebaseConfig = {

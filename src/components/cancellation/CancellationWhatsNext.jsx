@@ -8,7 +8,7 @@ export default function CancellationWhatsNext() {
     {
       num: "02",
       title: "Automated Gateway Reversal",
-      desc: "Cashfree Payments initiates an electronic refund transfer directly to your originating bank.",
+      desc: "Razorpay Payments initiates an electronic refund transfer directly to your originating bank.",
     },
     {
       num: "03",

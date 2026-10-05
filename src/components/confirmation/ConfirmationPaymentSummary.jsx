@@ -12,8 +12,8 @@ export default function ConfirmationPaymentSummary({
   const balanceDue = Math.max(0, totalAmount - advancePaid);
 
   const latestPayment = payments[0] || null;
-  const paymentMethod = latestPayment?.method || "Cashfree Secure Gateway";
-  const transactionId = latestPayment?.id || booking.paymentSessionId || booking.orderId || `CF-${(booking.bookingId || booking.id || "123456").slice(-8).toUpperCase()}`;
+  const paymentMethod = latestPayment?.method || "Razorpay Secure Gateway";
+  const transactionId = latestPayment?.id || booking.razorpayPaymentId || booking.razorpayOrderId || booking.orderId || `RZP-${(booking.bookingId || booking.id || "123456").slice(-8).toUpperCase()}`;
 
   const paymentDate = latestPayment?.createdAt || booking.createdAt || new Date();
 

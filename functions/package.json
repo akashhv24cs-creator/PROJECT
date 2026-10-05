@@ -1,6 +1,6 @@
 {
   "name": "zenera-trips-functions",
-  "description": "Cloud Functions for Zenera Trips backend operations and Cashfree Payment Gateway integration",
+  "description": "Cloud Functions for Zenera Trips backend operations and Razorpay Payment Gateway integration",
   "version": "1.0.0",
   "main": "index.js",
   "engines": {

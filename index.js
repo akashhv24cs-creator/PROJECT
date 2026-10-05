@@ -105,7 +105,7 @@ export const TESTIMONIALS = [
 export const APP_FEATURES = [
   { icon: "", text: "Live GPS tracking for your vehicle" },
   { icon: "", text: "Instant booking confirmation" },
-  { icon: "", text: "Secure payments via Cashfree" },
+  { icon: "", text: "Secure payments via Razorpay" },
   { icon: "", text: "Real-time trip status updates" },
   { icon: "", text: "Digital receipts & trip history" },
 ];

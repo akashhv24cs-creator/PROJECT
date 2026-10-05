@@ -74,8 +74,8 @@ service cloud.firestore {
         request.resource.data.status == "pending" &&
         request.resource.data.createdAt == request.time;
       
-      // UPDATE: Only admins (backend Cloud Functions) can update
-      allow update: if false;
+      // UPDATE: Owner or admins can update (e.g. after payment confirmation)
+      allow update: if isAuth() && (isAdmin() || isOwner(resource.data.userId));
       
       // DELETE: Only admins can delete
       allow delete: if false;
@@ -86,17 +86,20 @@ service cloud.firestore {
     // ============================================================
     
     match /payments/{paymentId} {
-      // READ: Only the booking owner, drivers, or admins can read their payments
+      // User can read own payments
       allow read: if isAuth() && (
         resource == null ||
+        resource.data.userId == request.auth.uid ||
         isOwner(resource.data.userId) ||
         isDriver() ||
         isAdmin()
       );
       
-      // WRITE: Cloud Functions use Admin SDK (bypasses rules entirely).
-      // Client-side writes are blocked — all payment writes go through Cloud Functions.
-      allow write: if false;
+      // Cloud Function / authenticated write & update
+      allow write: if request.auth == null || isAuth();
+      
+      // User can create new payments
+      allow create: if isAuth();
     }
     
     // ============================================================

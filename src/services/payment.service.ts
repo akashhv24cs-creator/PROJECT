@@ -10,26 +10,26 @@ export interface GetBookingPaymentsResult {
 
 declare global {
   interface Window {
-    Cashfree?: any;
+    Razorpay?: any;
   }
 }
 
-const CASHFREE_SDK_URL = "https://sdk.cashfree.com/js/v3/cashfree.js";
+const RAZORPAY_SDK_URL = "https://checkout.razorpay.com/v1/checkout.js";
 
 /**
- * Dynamically and reliably loads the Cashfree Web JS SDK v3.
- * Avoids deadlocks by checking window.Cashfree first, polling existing DOM script tags,
+ * Dynamically and reliably loads the Razorpay Checkout Web JS SDK.
+ * Avoids deadlocks by checking window.Razorpay first, polling existing DOM script tags,
  * and falling back to dynamic injection with an explicit timeout.
  */
-export const loadCashfreeSDK = (): Promise<any> => {
+export const loadRazorpaySDK = (): Promise<any> => {
   return new Promise((resolve, reject) => {
     if (typeof window === "undefined") {
       return reject(new Error("Window object not available."));
     }
 
     // 1. Immediate availability check
-    if (typeof window.Cashfree === "function") {
-      return resolve(window.Cashfree);
+    if (typeof window.Razorpay === "function") {
+      return resolve(window.Razorpay);
     }
 
     let settled = false;
@@ -45,7 +45,7 @@ export const loadCashfreeSDK = (): Promise<any> => {
       if (settled) return;
       settled = true;
       cleanup();
-      resolve(window.Cashfree);
+      resolve(window.Razorpay);
     };
 
     const handleFailure = (msg: string) => {
@@ -55,165 +55,83 @@ export const loadCashfreeSDK = (): Promise<any> => {
       reject(new Error(msg));
     };
 
-    // 2. Poll for window.Cashfree if script tag is already attached in HTML
+    // 2. Poll for window.Razorpay if script tag is already attached in HTML
     pollInterval = setInterval(() => {
-      if (typeof window.Cashfree === "function") {
+      if (typeof window.Razorpay === "function") {
         handleSuccess();
       }
     }, 100);
 
     // 3. Overall timeout to prevent infinite hanging
     timeoutId = setTimeout(() => {
-      if (typeof window.Cashfree === "function") {
+      if (typeof window.Razorpay === "function") {
         handleSuccess();
       } else {
-        handleFailure("Cashfree Payment SDK took too long to load. Please check your connection and retry.");
+        handleFailure("Razorpay Payment SDK took too long to load. Please check your connection and retry.");
       }
-    }, 6000);
+    }, 8000);
 
     // 4. If script tag does not exist at all, inject it
-    const existingScript = document.querySelector(`script[src="${CASHFREE_SDK_URL}"]`);
+    const existingScript = document.querySelector(`script[src="${RAZORPAY_SDK_URL}"]`);
     if (!existingScript) {
       const script = document.createElement("script");
-      script.src = CASHFREE_SDK_URL;
+      script.src = RAZORPAY_SDK_URL;
       script.async = true;
       script.onload = () => {
-        if (typeof window.Cashfree === "function") {
+        if (typeof window.Razorpay === "function") {
           handleSuccess();
         }
       };
       script.onerror = () => {
-        handleFailure("Failed to download Cashfree Payment SDK. Please check your connection.");
+        handleFailure("Failed to download Razorpay Payment SDK. Please check your connection.");
       };
       document.head.appendChild(script);
     }
   });
 };
 
-export interface CashfreeCheckoutLaunchResult {
+export interface RazorpayCheckoutOptions {
+  key: string;
+  amount: number;
+  currency?: string;
+  name?: string;
+  description?: string;
+  image?: string;
+  order_id: string;
+  handler: (response: {
+    razorpay_payment_id: string;
+    razorpay_order_id: string;
+    razorpay_signature: string;
+  }) => void;
+  prefill?: {
+    name?: string;
+    email?: string;
+    contact?: string;
+  };
+  theme?: {
+    color?: string;
+  };
+  modal?: {
+    ondismiss?: () => void;
+  };
+}
+
+export interface RazorpayCheckoutLaunchResult {
   success: boolean;
-  result?: any;
   error?: string;
   isCancelled?: boolean;
 }
 
 /**
- * Initiates the Cashfree Web Checkout (modal or redirect) using the paymentSessionId
- * returned from the secure createCashfreeOrder backend Cloud Function.
+ * Launches the Razorpay checkout modal with options.
  */
-export const initiateCashfreeWebCheckout = async (
-  paymentSessionId: string,
-  mode: "sandbox" | "production" = "sandbox",
-  preferredTarget: "_modal" | "_self" = "_modal"
-): Promise<CashfreeCheckoutLaunchResult> => {
-
-  if (!paymentSessionId || typeof paymentSessionId !== "string" || paymentSessionId.trim() === "") {
-    console.error("SAFE DIAGNOSTIC LOG — Empty payment session ID passed to initiateCashfreeWebCheckout");
-    return {
-      success: false,
-      error: "Payment session could not be created.",
-    };
-  }
-
-  const cleanSessionId = paymentSessionId.trim();
-
-  try {
-    const CashfreeConstructor = await loadCashfreeSDK();
-
-    const cashfree =
-      typeof CashfreeConstructor === "function"
-        ? CashfreeConstructor({ mode })
-        : typeof window.Cashfree === "function"
-          ? window.Cashfree({ mode })
-          : null;
-
-    if (!cashfree || typeof cashfree.checkout !== "function") {
-      throw new Error("Cashfree Checkout SDK could not be initialized on window.");
-    }
-
-    console.log("SAFE DIAGNOSTIC LOG — Cashfree checkout initialization:", {
-      mode,
-      target: preferredTarget,
-      hasSession: Boolean(cleanSessionId),
-      sessionIdPrefix: cleanSessionId.slice(0, 10) + "...",
-    });
-
-    // Execute Cashfree checkout
-    const checkoutResult = await cashfree.checkout({
-      paymentSessionId: cleanSessionId,
-      redirectTarget: preferredTarget,
-    });
-
-    console.log("SAFE DIAGNOSTIC LOG — Cashfree checkout returned outcome:", {
-      hasResult: Boolean(checkoutResult),
-      hasError: Boolean(checkoutResult?.error),
-      hasPaymentDetails: Boolean(checkoutResult?.paymentDetails),
-      hasRedirect: Boolean(checkoutResult?.redirect),
-    });
-
-    // Cashfree SDK v3 resolves with an error object rather than throwing
-    if (checkoutResult?.error) {
-      const sdkError = checkoutResult.error;
-      const errCode = String(sdkError?.code || "").toLowerCase();
-      const errMsg = String(sdkError?.message || "");
-
-      console.warn("SAFE DIAGNOSTIC LOG — Cashfree SDK reported error:", {
-        code: sdkError?.code,
-        type: sdkError?.type,
-        message: errMsg,
-      });
-
-      // User closed or aborted modal
-      if (
-        errCode.includes("user_dropped") ||
-        errCode.includes("aborted") ||
-        errCode.includes("useraborted") ||
-        errMsg.toLowerCase().includes("aborted") ||
-        errMsg.toLowerCase().includes("user closed")
-      ) {
-        return {
-          success: false,
-          error: "Payment was cancelled. You can try again when ready.",
-          isCancelled: true,
-          result: checkoutResult,
-        };
-      }
-
-      // If modal was blocked or failed to mount, attempt redirect checkout fallback if preferredTarget was _modal
-      if (preferredTarget === "_modal") {
-        console.warn("SAFE DIAGNOSTIC LOG — Modal target returned error, attempting redirect checkout fallback");
-        try {
-          const redirectResult = await cashfree.checkout({
-            paymentSessionId: cleanSessionId,
-            redirectTarget: "_self",
-          });
-          return {
-            success: true,
-            result: redirectResult,
-          };
-        } catch (redirectErr: any) {
-          console.error("SAFE DIAGNOSTIC LOG — Redirect fallback also failed:", redirectErr?.message);
-        }
-      }
-
-      return {
-        success: false,
-        error: errMsg || "Secure payment window could not be opened. Please try again.",
-        result: checkoutResult,
-      };
-    }
-
-    return {
-      success: true,
-      result: checkoutResult,
-    };
-  } catch (err: any) {
-    console.error("SAFE DIAGNOSTIC LOG — Cashfree checkout launch exception:", err?.message);
-    return {
-      success: false,
-      error: err?.message || "Secure payment window could not be opened. Please try again.",
-    };
-  }
+export const initiateRazorpayCheckout = async (
+  options: RazorpayCheckoutOptions
+): Promise<any> => {
+  const RazorpayConstructor = await loadRazorpaySDK();
+  const rzp = new RazorpayConstructor(options);
+  rzp.open();
+  return rzp;
 };
 
 const sanitizePaymentData = (docId: string, data: any, defaultBookingId: string, defaultUid: string): SanitizedPayment => {
@@ -299,7 +217,7 @@ export const subscribeToBookingPayments = (
 ): (() => void) => {
   if (!uid || !bookingId) {
     onUpdate([]);
-    return () => { };
+    return () => {};
   }
 
   try {
@@ -331,6 +249,6 @@ export const subscribeToBookingPayments = (
   } catch (err: any) {
     console.error("SAFE DIAGNOSTIC LOG — subscribeToBookingPayments setup error:", err);
     onError(err);
-    return () => { };
+    return () => {};
   }
 };

@@ -6,7 +6,7 @@
  * 2. Real road distance calculation per leg
  * 3. Tests 1 to 12 as defined in specification
  * 4. Authoritative backend Firestore pricing_rules integration
- * 5. Cashfree payment session consistency
+ * 5. Razorpay payment order consistency
  */
 
 const assert = (condition, message) => {
@@ -585,7 +585,7 @@ const t14_adv100 = computeBackendTripFare({
 assert(t14_adv100.advancePercent === 100, `T14: Advance percent is 100%`);
 assert(t14_adv100.advanceAmount === Math.round(t14_adv100.totalEstimate), `T14: Advance amount is 100% of total`);
 // TEST 15: Customer Phone Sanitization & Validation
-console.log("\n[TEST 15] Customer Phone Sanitization & Validation for Cashfree");
+console.log("\n[TEST 15] Customer Phone Sanitization & Validation for Razorpay");
 function sanitizeCustomerPhone(rawPhone) {
   if (!rawPhone || typeof rawPhone !== "string") return "";
   const digits = rawPhone.replace(/\D/g, "");
@@ -608,8 +608,8 @@ assert(sanitizeCustomerPhone("2345678901") === "", "T15: Rejects numbers startin
 assert(sanitizeCustomerPhone("") === "", "T15: Returns empty for empty input");
 assert(sanitizeCustomerPhone(null) === "", "T15: Handles null safely");
 
-// TEST 16: Fare Synchronization between Booking and Cashfree Amount
-console.log("\n[TEST 16] Fare Synchronization between Booking and Cashfree Amount");
+// TEST 16: Fare Synchronization between Booking and Razorpay Amount
+console.log("\n[TEST 16] Fare Synchronization between Booking and Razorpay Amount");
 const fareResult = computeBackendTripFare({
   origin: "Bangalore",
   destination: "Mysore",
@@ -625,7 +625,7 @@ const mockBooking = {
   advanceAmount: fareResult.advanceAmount,
 };
 const calculatedOrderAmount = mockBooking.advanceAmount;
-assert(calculatedOrderAmount === Math.round(fareResult.totalEstimate * 0.25), "T16: Cashfree order amount matches booking advance amount");
+assert(calculatedOrderAmount === Math.round(fareResult.totalEstimate * 0.25), "T16: Razorpay order amount matches booking advance amount");
 
 // TEST 17: orderedItinerary distanceKm and Firestore Data Integrity Audit
 console.log("\n[TEST 17] orderedItinerary distanceKm and Firestore Data Integrity Audit");
