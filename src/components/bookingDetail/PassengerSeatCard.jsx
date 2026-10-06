@@ -34,15 +34,15 @@ export default function PassengerSeatCard({ booking }) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
       
-      {/* 1. PASSENGER DETAILS CARD */}
+      {/* 1. CONTACT DETAILS CARD */}
       <div className="rounded-3xl border border-[#E2E8F0] dark:border-[#1E2E42] bg-white dark:bg-[#0E1A29] p-5 sm:p-6 shadow-sm space-y-4">
         <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0] dark:border-[#1E2E42]">
           <div>
             <span className="text-[10px] font-extrabold uppercase tracking-widest text-orange block">
-              Traveler Information
+              Lead Traveler
             </span>
             <h3 className="font-extrabold text-base sm:text-lg text-charcoal dark:text-white">
-              Passenger Details
+              Customer & Contact Details
             </h3>
           </div>
         </div>
@@ -51,7 +51,7 @@ export default function PassengerSeatCard({ booking }) {
           <div className="flex items-center justify-between p-3 rounded-2xl bg-[#F5F7FA] dark:bg-[#152436] border border-[#E2E8F0] dark:border-[#1E2E42]">
             <div>
               <span className="text-[10px] font-bold uppercase text-slate-400 block">
-                Primary Passenger
+                Primary Contact
               </span>
               <p className="font-extrabold text-sm text-charcoal dark:text-white">
                 {passengerName}
@@ -84,31 +84,31 @@ export default function PassengerSeatCard({ booking }) {
         </div>
       </div>
 
-      {/* 2. SEAT DETAILS & DRIVER STATUS */}
+      {/* 2. VEHICLE & DRIVER DETAILS */}
       <div className="rounded-3xl border border-[#E2E8F0] dark:border-[#1E2E42] bg-white dark:bg-[#0E1A29] p-5 sm:p-6 shadow-sm space-y-4">
         <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0] dark:border-[#1E2E42]">
           <div>
             <span className="text-[10px] font-extrabold uppercase tracking-widest text-orange block">
-              Cabin & Chauffeur
+              Fleet & Chauffeur
             </span>
             <h3 className="font-extrabold text-base sm:text-lg text-charcoal dark:text-white">
-              Seat & Driver Details
+              Vehicle & Driver Details
             </h3>
           </div>
         </div>
 
-        {/* Seat Layout Specifications */}
+        {/* Fleet Specifications */}
         <div className="p-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#152436] border border-[#E2E8F0] dark:border-[#1E2E42] space-y-2">
           <div className="flex items-center justify-between text-xs">
             <span className="font-extrabold text-charcoal dark:text-white">
               {vehicleMeta.name} — {vehicleMeta.seats}
             </span>
             <span className="text-orange font-bold text-[11px]">
-              Reserved Private Cabin
+              Reserved Private Cab
             </span>
           </div>
           <p className="text-[11px] text-slate-500 dark:text-slate-400">
-            Pushback captain seating with executive legroom, dual air-conditioning, and luggage boot space.
+            Dedicated AC vehicle with executive legroom, sanitized cabin, and luggage boot space.
           </p>
         </div>
 

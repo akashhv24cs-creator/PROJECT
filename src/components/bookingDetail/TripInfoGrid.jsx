@@ -4,11 +4,6 @@ export default function TripInfoGrid({ booking }) {
   if (!booking) return null;
 
   const vehicleMeta = getVehicleInfo(booking.vehicleName || booking.vehicleType, booking.vehicleId);
-  const passengerCount =
-    booking.passengers ||
-    booking.passengerCount ||
-    vehicleMeta.seats ||
-    "Standard Capacity";
 
   const bookingDate = formatDateTime(booking.createdAt) || "Instant Reservation";
 
@@ -20,9 +15,9 @@ export default function TripInfoGrid({ booking }) {
       accent: "text-orange",
     },
     {
-      label: "Passengers",
-      primary: typeof passengerCount === "number" ? `${passengerCount} Travelers` : passengerCount,
-      secondary: "Sanitized Vehicle",
+      label: "Trip Duration",
+      primary: `${booking.tripDays || 1} ${(booking.tripDays || 1) === 1 ? "Day" : "Days"}`,
+      secondary: "Private Cab Service",
       accent: "text-blue-500",
     },
     {

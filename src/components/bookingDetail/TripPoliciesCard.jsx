@@ -6,7 +6,7 @@ export default function TripPoliciesCard() {
     },
     {
       title: "Valid Government ID",
-      desc: "All passengers must carry a valid photo ID (Aadhaar / Passport / Driving License).",
+      desc: "All guests should carry a valid photo ID (Aadhaar / Passport / Driving License).",
     },
     {
       title: "Luggage Allowance",

@@ -180,8 +180,6 @@ export default function CheckoutBookingSummary({ booking }) {
       ? booking.tripDays
       : (fareDetails?.tripDays || 1);
 
-  const passengerCount = booking.passengersCount || (booking.passengerDetails?.length) || 1;
-  const seats = booking.seats || booking.selectedSeats || [];
 
   return (
     <div className="rounded-3xl border border-[#E2E8F0] dark:border-[#1E2E42] bg-white dark:bg-[#0E1A29] p-5 sm:p-6 shadow-sm space-y-5">
@@ -267,22 +265,12 @@ export default function CheckoutBookingSummary({ booking }) {
           </div>
 
           <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-[#152436]/60 border border-[#E2E8F0] dark:border-[#1E2E42] space-y-0.5">
-            <span className="text-[10px] uppercase font-bold text-slate-400 block">Passengers</span>
+            <span className="text-[10px] uppercase font-bold text-slate-400 block">Trip Duration</span>
             <p className="font-bold text-charcoal dark:text-white text-xs">
-              {passengerCount} {passengerCount === 1 ? "Traveler" : "Travelers"}
+              {tripDays} {tripDays === 1 ? "Day" : "Days"}
             </p>
           </div>
         </div>
-
-        {/* Seat Allocation (if exists) */}
-        {seats.length > 0 && (
-          <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 dark:bg-[#152436]/60 border border-[#E2E8F0] dark:border-[#1E2E42] text-xs">
-            <span className="text-slate-400 font-bold">Assigned Seats</span>
-            <span className="font-mono font-extrabold text-orange">
-              {seats.join(", ")}
-            </span>
-          </div>
-        )}
 
         {/* Route Legs & Distance Corridor (if present) */}
         {Array.isArray(booking.routeLegs || booking.legs) && (booking.routeLegs || booking.legs).length > 0 && (

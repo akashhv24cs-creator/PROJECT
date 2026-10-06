@@ -69,7 +69,7 @@ export default function ConfirmationTicketCard({ booking, onDownloadTicket }) {
         {/* Pass Info Grid */}
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
           <div>
-            <span className="text-[10px] font-bold text-slate-400 uppercase block">Passenger</span>
+            <span className="text-[10px] font-bold text-slate-400 uppercase block">Lead Traveler</span>
             <p className="font-bold text-charcoal dark:text-white truncate">{passengerName}</p>
           </div>
 

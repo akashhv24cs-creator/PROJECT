@@ -1,4 +1,4 @@
-import { formatDate, formatTime } from "../bookings/bookingUtils";
+import { formatDate } from "../bookings/bookingUtils";
 
 export default function ConfirmationPaymentSummary({
   booking,
@@ -6,14 +6,63 @@ export default function ConfirmationPaymentSummary({
 }) {
   if (!booking) return null;
 
-  const totalAmount = booking.totalAmount || booking.estimatedFare || booking.totalFare || 0;
-  const advancePercent = booking.advancePercent || 25;
-  const advancePaid = booking.advanceAmount || Math.round((totalAmount * advancePercent) / 100);
-  const balanceDue = Math.max(0, totalAmount - advancePaid);
+  const totalAmount =
+    (typeof booking.totalAmount === "number" && booking.totalAmount > 0)
+      ? booking.totalAmount
+      : (typeof booking.totalFare === "number" && booking.totalFare > 0)
+        ? booking.totalFare
+        : (typeof booking.estimatedFare === "number" && booking.estimatedFare > 0)
+          ? booking.estimatedFare
+          : 0;
 
-  const latestPayment = payments[0] || null;
+  const advancePercent =
+    typeof booking.advancePercent === "number" && booking.advancePercent > 0
+      ? booking.advancePercent
+      : typeof booking.advancePaidPercent === "number" && booking.advancePaidPercent > 0
+        ? booking.advancePaidPercent
+        : 25;
+
+  const latestPayment = Array.isArray(payments) && payments.length > 0 ? payments[0] : null;
+
+  // Exact settled amount
+  const advancePaid =
+    (typeof latestPayment?.amount === "number" && latestPayment.amount > 0)
+      ? latestPayment.amount
+      : (typeof booking.amountPaid === "number" && booking.amountPaid > 0)
+        ? booking.amountPaid
+        : (typeof booking.advanceAmount === "number" && booking.advanceAmount > 0)
+          ? booking.advanceAmount
+          : (typeof booking.advanceFare === "number" && booking.advanceFare > 0)
+            ? booking.advanceFare
+            : (typeof booking.paidAmount === "number" && booking.paidAmount > 0)
+              ? booking.paidAmount
+              : totalAmount > 0
+                ? Math.round((totalAmount * advancePercent) / 100)
+                : 0;
+
+  const isFullPayment =
+    advancePaid >= totalAmount ||
+    advancePercent === 100 ||
+    booking.advancePaidPercent === 100;
+
+  const balanceDue = isFullPayment
+    ? 0
+    : Math.max(
+        0,
+        typeof booking.balanceDue === "number" && booking.balanceDue >= 0
+          ? booking.balanceDue
+          : totalAmount - advancePaid
+      );
+
   const paymentMethod = latestPayment?.method || "Razorpay Secure Gateway";
-  const transactionId = latestPayment?.id || booking.razorpayPaymentId || booking.razorpayOrderId || booking.orderId || `RZP-${(booking.bookingId || booking.id || "123456").slice(-8).toUpperCase()}`;
+  const transactionId =
+    latestPayment?.id ||
+    latestPayment?.razorpayPaymentId ||
+    booking.razorpayPaymentId ||
+    booking.paymentId ||
+    booking.razorpayOrderId ||
+    booking.orderId ||
+    `RZP-${(booking.bookingId || booking.id || "123456").slice(-8).toUpperCase()}`;
 
   const paymentDate = latestPayment?.createdAt || booking.createdAt || new Date();
 
@@ -31,15 +80,21 @@ export default function ConfirmationPaymentSummary({
           </h3>
         </div>
 
-        <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 text-[10px] font-extrabold uppercase tracking-wider">
-          Advance Paid
+        <span
+          className={`px-2.5 py-0.5 rounded-full border text-[10px] font-extrabold uppercase tracking-wider ${
+            isFullPayment
+              ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
+              : "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20"
+          }`}
+        >
+          {isFullPayment ? "Full Payment Settled" : `${advancePercent}% Advance Paid`}
         </span>
       </div>
 
       {/* Paid Amount Highlight */}
       <div className="p-4 rounded-2xl bg-emerald-500/[0.04] dark:bg-emerald-500/[0.06] border border-emerald-500/20 space-y-1">
         <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700 dark:text-emerald-300 block">
-          Deposit Settled
+          Amount Paid (Settled)
         </span>
         <p className="font-mono font-extrabold text-2xl sm:text-3xl text-emerald-600 dark:text-emerald-400">
           ₹{advancePaid.toLocaleString("en-IN")}
@@ -72,11 +127,18 @@ export default function ConfirmationPaymentSummary({
           </span>
         </div>
 
-        {balanceDue > 0 && (
+        {balanceDue > 0 ? (
           <div className="flex items-center justify-between p-2.5 rounded-xl bg-orange/5 dark:bg-orange/10 border border-orange/20 font-bold text-orange">
             <span>Balance to Chauffeur</span>
             <span className="font-mono font-extrabold text-sm">
               ₹{balanceDue.toLocaleString("en-IN")}
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between p-2.5 rounded-xl bg-emerald-500/5 dark:bg-emerald-500/10 border border-emerald-500/20 font-bold text-emerald-600 dark:text-emerald-400">
+            <span>Remaining Balance</span>
+            <span className="font-mono font-extrabold text-sm">
+              ₹0 (Fully Paid)
             </span>
           </div>
         )}
@@ -93,3 +155,4 @@ export default function ConfirmationPaymentSummary({
     </div>
   );
 }
+

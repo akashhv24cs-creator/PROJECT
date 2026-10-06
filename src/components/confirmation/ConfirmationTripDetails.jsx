@@ -9,8 +9,6 @@ export default function ConfirmationTripDetails({ booking }) {
   const destinations = booking.majorDestinations || (booking.destination ? [booking.destination] : ["Outstation Trip"]);
   const endCity = destinations[0] || "Outstation";
 
-  const passengerCount = booking.passengersCount || booking.passengerDetails?.length || 1;
-  const seats = booking.seats || booking.selectedSeats || [];
 
   return (
     <div className="rounded-3xl border border-[#E2E8F0] dark:border-[#1E2E42] bg-white dark:bg-[#0E1A29] p-6 sm:p-7 shadow-sm space-y-6">
@@ -104,23 +102,23 @@ export default function ConfirmationTripDetails({ booking }) {
           </p>
         </div>
 
-        {/* Passengers */}
+        {/* Trip Duration */}
         <div className="p-3 rounded-2xl bg-[#F5F7FA] dark:bg-[#152436] border border-[#E2E8F0] dark:border-[#1E2E42] space-y-1">
           <span className="text-[10px] uppercase font-bold text-slate-400 block">
-            Passengers
+            Trip Duration
           </span>
           <p className="font-bold text-charcoal dark:text-white">
-            {passengerCount} {passengerCount === 1 ? "Adult" : "Adults"}
+            {booking.tripDays || 1} {(booking.tripDays || 1) === 1 ? "Day" : "Days"}
           </p>
         </div>
 
-        {/* Seats */}
+        {/* Fleet Service */}
         <div className="p-3 rounded-2xl bg-[#F5F7FA] dark:bg-[#152436] border border-[#E2E8F0] dark:border-[#1E2E42] space-y-1">
           <span className="text-[10px] uppercase font-bold text-slate-400 block">
-            Seats
+            Fleet Service
           </span>
           <p className="font-mono font-bold text-orange truncate">
-            {seats.length > 0 ? seats.join(", ") : "Assigned on Board"}
+            Dedicated Private Cab
           </p>
         </div>
 
