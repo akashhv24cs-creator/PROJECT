@@ -5,22 +5,26 @@ import { useFleetPricing } from "../../services/fleet.service";
 import { useAuth } from "../../hooks/useAuth";
 import { estimateTripCost } from "../../services/booking.service";
 import LocationSearchInput from "../common/LocationSearchInput.jsx";
+import CustomDatePicker from "../common/CustomDatePicker.jsx";
+import CustomTimePicker from "../common/CustomTimePicker.jsx";
+import CustomFleetSelect from "../common/CustomFleetSelect.jsx";
 
 export default function HomeFareEstimator() {
   const navigate = useNavigate();
   const { isAuthenticated, userProfile } = useAuth();
   const { fleets, loading: fleetsLoading, resolveVehicle } = useFleetPricing();
 
-  // Form State: Only Bangalore as default, no default destination or dates
+  // Form State: Bangalore as default pickup, empty destination & dates, default morning start time
   const [pickup, setPickup] = useState("Bangalore");
   const [destination, setDestination] = useState("");
   const [startDate, setStartDate] = useState("");
+  const [startTime, setStartTime] = useState("06:00");
   const [endDate, setEndDate] = useState("");
 
-  // Helper for datetime-local formatted string (YYYY-MM-DDTHH:mm)
-  const formatDateTimeLocal = (date) => {
+  const getTodayDate = () => {
+    const now = new Date();
     const pad = (n) => String(n).padStart(2, "0");
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
   };
 
   const [selectedVehicle, setSelectedVehicle] = useState(() => {
@@ -62,26 +66,32 @@ export default function HomeFareEstimator() {
 
   // Validation
   const validateInputs = () => {
-    if (!pickup.trim()) {
-      return "Please enter a pickup location.";
+    if (!pickup || !pickup.trim()) {
+      return "Please enter a start location.";
     }
-    if (!destination.trim()) {
+    if (!destination || !destination.trim()) {
       return "Please enter a destination.";
     }
+    if (!selectedVehicle || (!selectedVehicle.id && !selectedVehicle.name)) {
+      return "Please select a vehicle type.";
+    }
     if (!startDate) {
-      return "Please select a trip start date & time.";
+      return "Please select a start date.";
+    }
+    if (!startTime) {
+      return "Please select a start time.";
     }
     if (!endDate) {
-      return "Please select a trip end date & time.";
+      return "Please select an end date.";
     }
-    if (new Date(endDate) < new Date(startDate)) {
+    if (endDate < startDate) {
       return "Trip end date cannot be earlier than start date.";
     }
     return null;
   };
 
-  // Primary Action: Book Now
-  const handleBookNow = async (e) => {
+  // Primary Action: Continue Booking
+  const handleContinueBooking = async (e) => {
     if (e) e.preventDefault();
     setErrorMessage(null);
 
@@ -91,20 +101,24 @@ export default function HomeFareEstimator() {
       return;
     }
 
-    const startISO = new Date(startDate).toISOString();
-    const endISO = new Date(endDate).toISOString();
+    const canonicalVehicle = resolveVehicle(selectedVehicle?.name);
+    const startDateTime = new Date(`${startDate}T${startTime}:00`);
+    const endDateTime = new Date(`${endDate}T20:00:00`);
+    const startISO = isNaN(startDateTime.getTime()) ? `${startDate}T06:00:00.000Z` : startDateTime.toISOString();
+    const endISO = isNaN(endDateTime.getTime()) ? `${endDate}T20:00:00.000Z` : endDateTime.toISOString();
 
     setIsProcessing(true);
     try {
-      const canonicalVehicle = resolveVehicle(selectedVehicle?.name);
-
       // Calculate fare estimate for immediate visibility
       const res = await estimateTripCost({
         vehicleId: canonicalVehicle.id,
         vehicleType: selectedVehicle.name,
         vehicleName: selectedVehicle.name,
-        startDate: startISO,
-        endDate: endISO,
+        origin: pickup.trim(),
+        pickupLocation: pickup.trim(),
+        destination: destination.trim(),
+        startDate: startDate,
+        endDate: endDate,
       });
 
       let calculatedEstimate = null;
@@ -118,42 +132,72 @@ export default function HomeFareEstimator() {
         route: destination.trim(),
         destination: destination.trim(),
         vehicle: canonicalVehicle.id,
-        start: startISO,
-        end: endISO,
+        startDate: startDate,
+        startTime: startTime,
+        endDate: endDate,
+        start: startDate,
+        end: endDate,
+        time: startTime,
       });
 
-      // Seamless direct handoff to booking flow
-      navigate(`/book?${queryParams.toString()}`, {
+      // Seamless direct handoff to fleet booking flow
+      navigate(`/fleets?${queryParams.toString()}`, {
         state: {
           pickupLocation: pickup.trim(),
           destination: destination.trim(),
           selectedVehicleId: canonicalVehicle.id,
           vehicleId: canonicalVehicle.id,
           vehicleType: selectedVehicle.name,
-          startDate: startISO,
-          endDate: endISO,
+          startDate: startDate,
+          startTime: startTime,
+          endDate: endDate,
+          tripStartDate: startDate,
+          tripEndDate: endDate,
+          tripTime: startTime,
+          startDateTime: startISO,
+          endDateTime: endISO,
           estimateData: calculatedEstimate,
+          fromHomeBooking: true,
         },
       });
     } catch (err) {
       console.error("SAFE DIAGNOSTIC LOG — Booking handoff error:", err);
-      const canonicalVehicle = resolveVehicle(selectedVehicle?.name);
-      // Even if background estimate has network glitch, proceed to book page seamlessly
       const queryParams = new URLSearchParams({
         pickup: pickup.trim(),
         route: destination.trim(),
         destination: destination.trim(),
         vehicle: canonicalVehicle.id,
-        start: startISO,
-        end: endISO,
+        startDate: startDate,
+        startTime: startTime,
+        endDate: endDate,
+        start: startDate,
+        end: endDate,
+        time: startTime,
       });
-      navigate(`/book?${queryParams.toString()}`);
+      navigate(`/fleets?${queryParams.toString()}`, {
+        state: {
+          pickupLocation: pickup.trim(),
+          destination: destination.trim(),
+          selectedVehicleId: canonicalVehicle.id,
+          vehicleId: canonicalVehicle.id,
+          vehicleType: selectedVehicle.name,
+          startDate: startDate,
+          startTime: startTime,
+          endDate: endDate,
+          tripStartDate: startDate,
+          tripEndDate: endDate,
+          tripTime: startTime,
+          startDateTime: startISO,
+          endDateTime: endISO,
+          fromHomeBooking: true,
+        },
+      });
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const todayMinDateTime = new Date().toISOString().slice(0, 16);
+  const minDate = getTodayDate();
 
   return (
     <div className="w-full bg-white dark:bg-[#0E1A29] border border-[#E2E8F0] dark:border-[#1E2E42] rounded-3xl p-6 sm:p-8 lg:p-10 shadow-xl shadow-slate-900/5 dark:shadow-2xl relative overflow-visible transition-all duration-200">
@@ -192,7 +236,7 @@ export default function HomeFareEstimator() {
       </AnimatePresence>
 
       {/* Unified Form */}
-      <form onSubmit={handleBookNow} className="space-y-6">
+      <form onSubmit={handleContinueBooking} className="space-y-6">
         
         {/* Row 1: Start Location, Swap, Destination, Vehicle */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-end">
@@ -216,7 +260,7 @@ export default function HomeFareEstimator() {
               type="button"
               onClick={handleSwap}
               title="Swap Locations"
-              className="p-3.5 rounded-xl bg-[#F5F7FA] dark:bg-[#0A1420] border border-[#E2E8F0] dark:border-[#1E2E42] text-slate-600 dark:text-slate-400 hover:text-orange dark:hover:text-orange hover:border-orange/40 transition-all cursor-pointer shadow-sm"
+              className="p-3.5 rounded-xl bg-[#F5F7FA] dark:bg-[#0A1420] border border-slate-200 dark:border-slate-800/80 text-slate-600 dark:text-slate-400 hover:text-orange dark:hover:text-orange hover:border-orange/50 transition-all cursor-pointer shadow-sm"
               aria-label="Swap Locations"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -242,88 +286,69 @@ export default function HomeFareEstimator() {
           </div>
 
           {/* Vehicle Selection */}
-          <div className="lg:col-span-3 space-y-1.5">
-            <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 block">
-              Vehicle Type
-            </label>
-            <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-orange">
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.5 2.8C2.1 11.2 2 11.6 2 12v4c0 .6.4 1 1 1h2" />
-                  <circle cx="7" cy="17" r="2" />
-                  <path d="M9 17h6" />
-                  <circle cx="17" cy="17" r="2" />
-                </svg>
-              </div>
-              <select
-                value={selectedVehicle.name}
-                onChange={(e) => {
-                  const found = fleets.find((v) => v.name === e.target.value) || resolveVehicle(e.target.value);
-                  if (found) setSelectedVehicle(found);
-                }}
-                className="w-full bg-[#F5F7FA] dark:bg-[#0A1420] border border-[#E2E8F0] dark:border-[#1E2E42] rounded-xl pl-10 pr-9 py-3.5 text-charcoal dark:text-white text-xs sm:text-sm font-medium focus:outline-none focus:ring-2 focus:ring-orange focus:border-orange appearance-none cursor-pointer"
-              >
-                {(fleets.length > 0 ? fleets : [selectedVehicle]).map((v) => (
-                  <option key={v.id || v.name} value={v.name} className="bg-white dark:bg-[#0E1A29] text-charcoal dark:text-white">
-                    {v.name} ({v.seats}) — ₹{v.pricePerKm || v.backendRatePerKm}/km
-                  </option>
-                ))}
-              </select>
-              <div className="absolute inset-y-0 right-0 pr-3.5 flex items-center pointer-events-none text-slate-500">
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="m6 9 6 6 6-6" />
-                </svg>
-              </div>
-            </div>
+          <div className="lg:col-span-3">
+            <CustomFleetSelect
+              id="vehicle-type-select"
+              label="Vehicle Type"
+              fleets={fleets}
+              selectedVehicle={selectedVehicle}
+              onSelect={(v) => setSelectedVehicle(v)}
+              placement="bottom"
+              align="right"
+            />
           </div>
         </div>
 
-        {/* Row 2: Trip Start Date, Trip End Date, Book Now Button */}
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-end">
+        {/* Row 2: Start Date, Start Time, End Date, Continue Booking Button */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3.5 items-end">
           
-          {/* Start Date & Time */}
-          <div className="md:col-span-4 space-y-1.5">
-            <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 block">
-              Trip Start Date & Time
-            </label>
-            <div className="relative">
-              <input
-                type="datetime-local"
-                value={startDate}
-                min={todayMinDateTime}
-                onChange={(e) => {
-                  setStartDate(e.target.value);
-                  if (endDate && new Date(e.target.value) > new Date(endDate)) {
-                    const newEnd = new Date(e.target.value);
-                    newEnd.setDate(newEnd.getDate() + 2);
-                    setEndDate(formatDateTimeLocal(newEnd));
-                  }
-                }}
-                className="w-full bg-[#F5F7FA] dark:bg-[#0A1420] border border-[#E2E8F0] dark:border-[#1E2E42] rounded-xl px-3.5 py-3.5 text-charcoal dark:text-white text-xs sm:text-sm font-medium focus:outline-none focus:ring-2 focus:ring-orange focus:border-orange transition-all cursor-pointer"
-                required
-              />
-            </div>
+          {/* Start Date */}
+          <div className="sm:col-span-1 lg:col-span-3">
+            <CustomDatePicker
+              id="home-start-date"
+              label="Start Date"
+              value={startDate}
+              minDate={minDate}
+              onChange={(val) => {
+                setStartDate(val);
+                if (endDate && val > endDate) {
+                  setEndDate(val);
+                }
+              }}
+              placeholder="Select start date"
+              required
+            />
           </div>
 
-          {/* End Date & Time */}
-          <div className="md:col-span-4 space-y-1.5">
-            <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 block">
-              Trip End Date & Time
-            </label>
-            <div className="relative">
-              <input
-                type="datetime-local"
-                value={endDate}
-                min={startDate || todayMinDateTime}
-                onChange={(e) => setEndDate(e.target.value)}
-                className="w-full bg-[#F5F7FA] dark:bg-[#0A1420] border border-[#E2E8F0] dark:border-[#1E2E42] rounded-xl px-3.5 py-3.5 text-charcoal dark:text-white text-xs sm:text-sm font-medium focus:outline-none focus:ring-2 focus:ring-orange focus:border-orange transition-all cursor-pointer"
-                required
-              />
-            </div>
+          {/* Start Time */}
+          <div className="sm:col-span-1 lg:col-span-3">
+            <CustomTimePicker
+              id="home-start-time"
+              label="Start Time"
+              value={startTime}
+              onChange={(val) => setStartTime(val)}
+              placeholder="Select start time"
+              required
+            />
           </div>
 
-          {/* Primary Action Button: Book Now */}
-          <div className="md:col-span-4">
+          {/* End Date */}
+          <div className="sm:col-span-1 lg:col-span-3">
+            <CustomDatePicker
+              id="home-end-date"
+              label="End Date"
+              value={endDate}
+              minDate={startDate || minDate}
+              onChange={(val) => setEndDate(val)}
+              placeholder="Select end date"
+              placement="top"
+              align="right"
+              required
+            />
+          </div>
+
+          {/* Primary Action Button: Continue Booking */}
+          <div className="sm:col-span-1 lg:col-span-3">
             <button
               type="submit"
               disabled={isProcessing}
@@ -336,7 +361,7 @@ export default function HomeFareEstimator() {
                 </>
               ) : (
                 <>
-                  <span>Book Now</span>
+                  <span>Continue Booking</span>
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M5 12h14" />
                     <path d="m12 5 7 7-7 7" />
@@ -422,10 +447,10 @@ export default function HomeFareEstimator() {
 
                 <button
                   type="button"
-                  onClick={handleBookNow}
+                  onClick={handleContinueBooking}
                   className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-orange hover:bg-orangeLight text-white font-bold text-xs sm:text-sm shadow-md shadow-orange/20 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                 >
-                  <span>Proceed with Booking</span>
+                  <span>Continue Booking</span>
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                     <path d="M5 12h14" />
                     <path d="m12 5 7 7-7 7" />
@@ -439,4 +464,5 @@ export default function HomeFareEstimator() {
     </div>
   );
 }
+
 

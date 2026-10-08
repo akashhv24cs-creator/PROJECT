@@ -329,18 +329,22 @@ export function buildOrderedItinerary(params: BuildItineraryParams): ItineraryPo
     });
   }
 
-  if (primaryDestPoints.length === 0) {
-    const coords = resolveLocationCoordinates("Mysore");
-    primaryDestPoints.push({
-      id: "dest-mysore",
-      type: "destination",
-      name: "Mysore",
-      lat: coords?.lat || 12.2958,
-      lng: coords?.lng || 76.6394,
-      distanceKm: 0,
-      isPrimary: true,
-      categoryName: "Primary Destination",
-    });
+  if (primaryDestPoints.length === 0 && rawDests.length > 0) {
+    const rawDest = rawDests[0];
+    const destName = typeof rawDest === "object" ? rawDest.name || rawDest.id : String(rawDest);
+    if (destName) {
+      const coords = resolveLocationCoordinates(destName);
+      primaryDestPoints.push({
+        id: typeof rawDest === "object" && rawDest.id ? rawDest.id : "dest-1",
+        type: "destination",
+        name: destName,
+        lat: coords?.lat || 0,
+        lng: coords?.lng || 0,
+        distanceKm: 0,
+        isPrimary: true,
+        categoryName: "Primary Destination",
+      });
+    }
   }
 
   // 4. Collect Secondary / Custom Stops

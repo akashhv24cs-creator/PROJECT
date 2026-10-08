@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import Navbar from "./Navbar";
 import Hero from "./Hero";
 import HomeBookingSection from "./src/components/home/HomeBookingSection.jsx";
@@ -8,7 +8,6 @@ import WhyZenera from "./WhyZenera";
 import Testimonials from "./Testimonials";
 import HomeCTA from "./src/components/home/HomeCTA.jsx";
 import Footer from "./Footer";
-import Dashboard from "./src/pages/Dashboard.jsx";
 import BookPage from "./src/pages/Book.jsx";
 import BookingsPage from "./src/pages/Bookings.jsx";
 import BookingDetailPage from "./src/pages/BookingDetail.jsx";
@@ -86,14 +85,7 @@ export default function App() {
           <Route path="/package/:packageId" element={<PackageDetail />} />
           <Route path="/login" element={<Login />} />
           <Route path="/firebase-test" element={<FirebaseTestPage />} />
-          <Route
-            path="/dashboard"
-            element={
-              <ProtectedRoute>
-                <Dashboard />
-              </ProtectedRoute>
-            }
-          />
+          <Route path="/dashboard" element={<Navigate to="/bookings" replace />} />
           <Route path="/fleets" element={<BookPage />} />
           <Route path="/fleet" element={<BookPage />} />
           <Route path="/book" element={<BookPage />} />

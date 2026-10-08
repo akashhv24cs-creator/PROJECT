@@ -14,6 +14,7 @@ import {
 import {
   validateCustomStopAgainstRoute,
   filterAllowedStopsForRoute,
+  isSameLocation,
 } from "../services/routeValidation.service";
 import {
   buildOrderedItinerary,
@@ -23,6 +24,9 @@ import {
 import DestinationImage from "../components/common/DestinationImage";
 import VehicleCardImage from "../components/fleets/VehicleCardImage";
 import LocationSearchInput from "../components/common/LocationSearchInput";
+import CustomDatePicker from "../components/common/CustomDatePicker";
+import CustomTimePicker from "../components/common/CustomTimePicker";
+import CustomFleetSelect from "../components/common/CustomFleetSelect";
 import PeopleAlsoVisit from "../components/tripBuilder/PeopleAlsoVisit";
 import AddStopSearch from "../components/tripBuilder/AddStopSearch";
 import FleetJourneyBuilder from "../components/tripBuilder/FleetJourneyBuilder";
@@ -54,11 +58,11 @@ export default function BookPage() {
     canonical: "https://zenera-trips.web.app/fleets",
   });
 
-  // URL Query Parameters prefill
+  // URL Query Parameters & State prefill
   const searchParams = new URLSearchParams(location.search);
   const initialPickup = searchParams.get("pickup") || location.state?.pickupLocation || "Bangalore, Karnataka";
   const initialDestination =
-    searchParams.get("destination") || searchParams.get("route") || location.state?.destination || "Mysore";
+    searchParams.get("destination") || searchParams.get("route") || location.state?.destination || "";
   const initialStopsParam = searchParams.get("stops") || "";
   const initialStops = initialStopsParam
     ? initialStopsParam
@@ -75,34 +79,42 @@ export default function BookPage() {
     location.state?.vehicleType;
 
   const [selectedVehicleId, setSelectedVehicleId] = useState(() => {
-    const resolved = resolveVehicle(initialVehicleParam);
-    return resolved.id;
+    const resolved = resolveFleetVehicle(initialVehicleParam) || resolveVehicle(initialVehicleParam);
+    return resolved?.id || "innova-crysta";
   });
-
-  // Sync selectedVehicleId if URL param, location state, or fleets update
-  useEffect(() => {
-    if (initialVehicleParam) {
-      const resolved = resolveFleetVehicle(initialVehicleParam);
-      if (resolved && resolved.id) {
-        setSelectedVehicleId(resolved.id);
-        return;
-      }
-    }
-    if (fleets.length > 0 && !fleets.some((v) => v.id.toLowerCase() === selectedVehicleId.toLowerCase())) {
-      setSelectedVehicleId(fleets[0].id);
-    }
-  }, [initialVehicleParam, fleets, resolveFleetVehicle]);
 
   // 2. Destination & Route Planning State
   const [pickupLocation, setPickupLocation] = useState(initialPickup);
   const [selectedDestId, setSelectedDestId] = useState(() => {
+    if (!initialDestination) return "";
+    const cleanDest = String(initialDestination).trim().toLowerCase();
     const match = DESTINATIONS.find(
       (d) =>
-        d.id.toLowerCase() === initialDestination.toLowerCase() ||
-        d.name.toLowerCase() === initialDestination.toLowerCase()
+        d.id.toLowerCase() === cleanDest ||
+        d.name.toLowerCase() === cleanDest ||
+        cleanDest.includes(d.name.toLowerCase()) ||
+        d.name.toLowerCase().includes(cleanDest)
     );
-    return match ? match.id : "mysore";
+    return match ? match.id : "";
   });
+
+  // Sync selectedDestId when navigating with destination params
+  useEffect(() => {
+    const destParam = searchParams.get("destination") || searchParams.get("route") || location.state?.destination;
+    if (destParam) {
+      const cleanDest = String(destParam).trim().toLowerCase();
+      const match = DESTINATIONS.find(
+        (d) =>
+          d.id.toLowerCase() === cleanDest ||
+          d.name.toLowerCase() === cleanDest ||
+          cleanDest.includes(d.name.toLowerCase()) ||
+          d.name.toLowerCase().includes(cleanDest)
+      );
+      if (match) {
+        setSelectedDestId(match.id);
+      }
+    }
+  }, [location.search, location.state?.destination]);
 
   const [userStops, setUserStops] = useState(() => {
     if (initialStops.length > 0) {
@@ -138,18 +150,52 @@ export default function BookPage() {
 
   // 3. Trip Date & Schedule State
   const getDefaultStartDate = () => {
+    const raw =
+      location.state?.startDate ||
+      location.state?.tripStartDate ||
+      searchParams.get("startDate") ||
+      searchParams.get("start");
+    if (raw) {
+      const clean = String(raw).trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) return clean;
+      const d = new Date(clean);
+      if (!isNaN(d.getTime())) return d.toISOString().split("T")[0];
+    }
     const d = new Date();
     d.setDate(d.getDate() + 1);
     return d.toISOString().split("T")[0];
   };
 
-  const [tripStartDate, setTripStartDate] = useState(getDefaultStartDate);
-  const [tripEndDate, setTripEndDate] = useState(() => {
+  const getDefaultEndDate = () => {
+    const raw =
+      location.state?.endDate ||
+      location.state?.tripEndDate ||
+      searchParams.get("endDate") ||
+      searchParams.get("end");
+    if (raw) {
+      const clean = String(raw).trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) return clean;
+      const d = new Date(clean);
+      if (!isNaN(d.getTime())) return d.toISOString().split("T")[0];
+    }
     const d = new Date();
     d.setDate(d.getDate() + 2);
     return d.toISOString().split("T")[0];
-  });
-  const [tripTime, setTripTime] = useState("06:30");
+  };
+
+  const getDefaultTripTime = () => {
+    const raw =
+      location.state?.startTime ||
+      location.state?.tripTime ||
+      searchParams.get("startTime") ||
+      searchParams.get("time");
+    if (raw) return String(raw).trim();
+    return "06:30";
+  };
+
+  const [tripStartDate, setTripStartDate] = useState(getDefaultStartDate);
+  const [tripEndDate, setTripEndDate] = useState(getDefaultEndDate);
+  const [tripTime, setTripTime] = useState(getDefaultTripTime);
 
   // 4. Advance Percentage & Backend Pricing
   const [advancePercent, setAdvancePercent] = useState(25);
@@ -166,12 +212,16 @@ export default function BookPage() {
   }, [selectedVehicleId, resolveFleetVehicle]);
 
   const currentDestination = useMemo(() => {
-    return DESTINATIONS.find((d) => d.id === selectedDestId) || DESTINATIONS[0];
+    if (!selectedDestId) return null;
+    return DESTINATIONS.find((d) => d.id === selectedDestId) || null;
   }, [selectedDestId]);
 
   // Primary ordered route waypoints for corridor validation
   const primaryWaypoints = useMemo(() => {
-    const waypoints = [pickupLocation || "Bangalore", currentDestination.name];
+    const waypoints = [pickupLocation || "Bangalore"];
+    if (currentDestination?.name) {
+      waypoints.push(currentDestination.name);
+    }
     userStops.forEach((s) => {
       if (s.isPrimary && !waypoints.includes(s.name)) {
         waypoints.push(s.name);
@@ -182,12 +232,14 @@ export default function BookPage() {
 
   // Dynamic recommendations for active destination and chosen stops
   const dynamicRecommendations = useMemo(() => {
+    if (!selectedDestId || !currentDestination) return [];
     const recs = getRecommendationsForJourney(selectedDestId, userStops);
     return filterAllowedStopsForRoute(recs, [pickupLocation || "Bangalore", currentDestination.name]);
   }, [selectedDestId, userStops, pickupLocation, currentDestination]);
 
   // Revalidate existing stops automatically when primary destination changes
   useEffect(() => {
+    if (!currentDestination) return;
     setUserStops((prevStops) => {
       if (prevStops.length === 0) return prevStops;
 
@@ -216,7 +268,7 @@ export default function BookPage() {
 
       return validStops;
     });
-  }, [selectedDestId, currentDestination.name, pickupLocation]);
+  }, [selectedDestId, currentDestination?.name, pickupLocation]);
 
   const [showTermsModal, setShowTermsModal] = useState(false);
 
@@ -226,6 +278,22 @@ export default function BookPage() {
 
   // Authoritative Normalized Route Itinerary & Road Distance Calculation
   const authoritativeRoute = useMemo(() => {
+    if (!currentDestination) {
+      return {
+        orderedItinerary: [
+          {
+            id: "origin-pickup",
+            name: pickupLocation || "Bangalore, Karnataka",
+            type: "pickup",
+            distanceKm: 0,
+            isPrimary: true,
+          },
+        ],
+        legs: [],
+        totalDistanceKm: 0,
+        isCorridorValid: true,
+      };
+    }
     return calculateAuthoritativeRoute({
       origin: pickupLocation || "Bangalore, Karnataka",
       destination: currentDestination.name,
@@ -236,11 +304,12 @@ export default function BookPage() {
 
   // Calculate exact distances for destination and added stops
   const destinationDistanceKm = useMemo(() => {
+    if (!currentDestination) return 0;
     if (typeof currentDestination.distanceKm === "number" && currentDestination.distanceKm > 0) {
       return currentDestination.distanceKm;
     }
     const match = String(currentDestination.distance || "").match(/(\d+)/);
-    return match ? parseInt(match[1], 10) : 145; // Default: Mysore (145km)
+    return match ? parseInt(match[1], 10) : 0;
   }, [currentDestination]);
 
   const stopsDistanceKm = useMemo(() => {
@@ -259,7 +328,10 @@ export default function BookPage() {
 
   // Fetch Authoritative Backend Pricing
   const fetchBackendFareEstimate = useCallback(async () => {
-    if (!selectedVehicle || !tripStartDate || !tripEndDate) return;
+    if (!selectedVehicle || !currentDestination || !tripStartDate || !tripEndDate) {
+      setBackendEstimate(null);
+      return;
+    }
 
     const requestId = ++estimateRequestIdRef.current;
     setIsEstimating(true);
@@ -366,16 +438,28 @@ export default function BookPage() {
     setUserStops(newStops);
   };
 
+  const handleEditStopName = (stopId, newName) => {
+    if (!newName?.trim()) return;
+    setUserStops((prev) =>
+      prev.map((s) =>
+        s.id === stopId || s.name?.toLowerCase() === stopId?.toLowerCase()
+          ? { ...s, name: newName.trim() }
+          : s
+      )
+    );
+  };
+
   const handleClearAllStops = () => {
     setUserStops([]);
   };
 
   // Pure client authoritative fallback (for offline or immediate responsive state)
   const clientAuthoritativeFallback = useMemo(() => {
+    if (!selectedVehicle) return null;
     return calculateAuthoritativeFare({
       vehicle: selectedVehicle,
       origin: pickupLocation || "Bangalore, Karnataka",
-      destination: currentDestination.name,
+      destination: currentDestination ? currentDestination.name : undefined,
       userStops: userStops,
       orderedItinerary: authoritativeRoute.orderedItinerary,
       routeDistanceKm: authoritativeRoute.totalDistanceKm,
@@ -386,7 +470,7 @@ export default function BookPage() {
       endDate: tripEndDate,
       advancePercent: advancePercent,
     });
-  }, [selectedVehicle, destinationDistanceKm, stopsDistanceKm, authoritativeRoute, tripStartDate, tripEndDate, advancePercent, pickupLocation, currentDestination.name, userStops]);
+  }, [selectedVehicle, destinationDistanceKm, stopsDistanceKm, authoritativeRoute, tripStartDate, tripEndDate, advancePercent, pickupLocation, currentDestination, userStops]);
 
   // Active authoritative fare ledger
   const activeFareLedger = backendEstimate || clientAuthoritativeFallback;
@@ -431,6 +515,40 @@ export default function BookPage() {
     return `₹${Math.round(amt).toLocaleString("en-IN")}`;
   };
 
+  const formatDisplayDate = (dateStr) => {
+    if (!dateStr) return "—";
+    try {
+      const cleanStr = String(dateStr).trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(cleanStr)) {
+        const parts = cleanStr.split("-").map(Number);
+        const d = new Date(parts[0], parts[1] - 1, parts[2]);
+        return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+      }
+      const d = new Date(cleanStr);
+      if (!isNaN(d.getTime())) {
+        return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+      }
+    } catch (_) {}
+    return dateStr;
+  };
+
+  const formatDisplayTime = (timeStr) => {
+    if (!timeStr) return "—";
+    try {
+      const cleanStr = String(timeStr).trim();
+      if (/am|pm/i.test(cleanStr)) return cleanStr;
+      const [hours, minutes] = cleanStr.split(":");
+      if (hours !== undefined && minutes !== undefined) {
+        const h = parseInt(hours, 10);
+        const m = minutes.slice(0, 2);
+        const ampm = h >= 12 ? "PM" : "AM";
+        const h12 = h % 12 || 12;
+        return `${String(h12).padStart(2, "0")}:${m} ${ampm}`;
+      }
+    } catch (_) {}
+    return timeStr;
+  };
+
   // Helper to fetch backend price for a specific vehicle card
   const getVehiclePriceDisplay = (vehicle) => {
     const rate = vehicle.pricePerKm || vehicle.backendRatePerKm || 17;
@@ -458,6 +576,18 @@ export default function BookPage() {
           return;
         }
       }
+    }
+
+    if (!currentDestination) {
+      setErrorMessage("Please select a destination above before proceeding to booking.");
+      return;
+    }
+
+    if (isSameLocation(pickupLocation, currentDestination)) {
+      setErrorMessage(
+        "Pickup origin and destination cannot be the same location. Please select an outstation destination."
+      );
+      return;
     }
 
     if (!isAuthenticated || !currentUser) {
@@ -678,6 +808,7 @@ export default function BookPage() {
           </div>
         )}
 
+
         {/* ========================================================
             CORE FLEETS SECTION (Clean, Simple & Premium)
            ======================================================== */}
@@ -724,7 +855,10 @@ export default function BookPage() {
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3.5 sm:gap-4.5">
               {fleets.map((vehicle) => {
-                const isSelected = vehicle.id === selectedVehicleId || vehicle.name === selectedVehicle?.name;
+                const isSelected =
+                  vehicle.id?.toLowerCase() === selectedVehicleId?.toLowerCase() ||
+                  vehicle.name?.toLowerCase() === selectedVehicle?.name?.toLowerCase() ||
+                  vehicle.id === selectedVehicle?.id;
                 const priceDisplay = getVehiclePriceDisplay(vehicle);
 
                 return (
@@ -792,57 +926,89 @@ export default function BookPage() {
           <div className="flex items-center gap-2 overflow-x-auto scrollbar-none pb-2 -mx-4 px-4 sm:mx-0 sm:px-0">
             {DESTINATIONS.map((dest) => {
               const isSelected = dest.id === selectedDestId;
+              const isSameAsPickup = pickupLocation && isSameLocation(dest, pickupLocation);
 
               return (
                 <button
                   key={dest.id}
                   type="button"
-                  onClick={() => setSelectedDestId(dest.id)}
-                  className={`px-4 py-2 rounded-2xl text-xs font-heading font-bold transition-all shrink-0 cursor-pointer flex items-center gap-2 ${isSelected
+                  onClick={() => {
+                    setErrorMessage("");
+                    if (isSameAsPickup) {
+                      setErrorMessage(
+                        `Cannot select ${dest.name} as destination because it matches your pickup origin (${pickupLocation.split(",")[0]}).`
+                      );
+                      return;
+                    }
+                    setSelectedDestId(dest.id);
+                  }}
+                  className={`px-4 py-2 rounded-2xl text-xs font-heading font-bold transition-all shrink-0 cursor-pointer flex items-center gap-2 ${
+                    isSelected
                       ? "bg-orange text-white shadow-md shadow-orange/25"
+                      : isSameAsPickup
+                      ? "bg-slate-100 dark:bg-[#152436] text-slate-400 border border-dashed border-rose-300 dark:border-rose-900 opacity-60"
                       : "bg-white dark:bg-[#0E1A29] text-slate-600 dark:text-slate-300 border border-[#E2E8F0] dark:border-[#1E2E42] hover:border-orange/30"
-                    }`}
+                  }`}
                 >
                   <span>{dest.name}</span>
+                  {isSameAsPickup && (
+                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-500 font-bold uppercase">
+                      Origin
+                    </span>
+                  )}
                 </button>
               );
             })}
           </div>
 
-          {/* Active Destination Spotlight */}
-          <div className="rounded-3xl bg-white dark:bg-[#0E1A29] border border-[#E2E8F0] dark:border-[#1E2E42] p-6 sm:p-8 shadow-sm grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
-            <div className="md:col-span-5 rounded-2xl overflow-hidden aspect-[16/10] bg-slate-100 dark:bg-[#152436]">
-              <DestinationImage
-                src={currentDestination.image}
-                alt={currentDestination.alt || currentDestination.name}
-                aspectRatio="aspect-auto"
-                className="w-full h-full"
-              />
-            </div>
-
-            <div className="md:col-span-7 space-y-3">
-              <div>
-                <span className="text-orange text-xs font-heading font-bold uppercase tracking-wider">
-                  {currentDestination.tagline}
-                </span>
-                <h3 className="font-heading font-extrabold text-2xl sm:text-3xl text-charcoal dark:text-white uppercase tracking-tight mt-0.5">
-                  {currentDestination.name}, {currentDestination.state}
-                </h3>
-                <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed mt-2">
-                  {currentDestination.description || currentDestination.overview}
-                </p>
+          {/* Active Destination Spotlight or Destination Placeholder */}
+          {currentDestination ? (
+            <div className="rounded-3xl bg-white dark:bg-[#0E1A29] border border-[#E2E8F0] dark:border-[#1E2E42] p-6 sm:p-8 shadow-sm grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
+              <div className="md:col-span-5 rounded-2xl overflow-hidden aspect-[16/10] bg-slate-100 dark:bg-[#152436]">
+                <DestinationImage
+                  src={currentDestination.image}
+                  alt={currentDestination.alt || currentDestination.name}
+                  aspectRatio="aspect-auto"
+                  className="w-full h-full"
+                />
               </div>
 
-              <div className="flex flex-wrap gap-2 text-xs text-slate-600 dark:text-slate-300 pt-2">
-                <span className="px-3 py-1 rounded-xl bg-[#F5F7FA] dark:bg-[#07111F] border border-[#E2E8F0] dark:border-[#1E2E42]">
-                  <strong>{currentDestination.duration}</strong>
-                </span>
-                <span className="px-3 py-1 rounded-xl bg-[#F5F7FA] dark:bg-[#07111F] border border-[#E2E8F0] dark:border-[#1E2E42]">
-                  <strong>{currentDestination.distance}</strong>
-                </span>
+              <div className="md:col-span-7 space-y-3">
+                <div>
+                  <span className="text-orange text-xs font-heading font-bold uppercase tracking-wider">
+                    {currentDestination.tagline}
+                  </span>
+                  <h3 className="font-heading font-extrabold text-2xl sm:text-3xl text-charcoal dark:text-white uppercase tracking-tight mt-0.5">
+                    {currentDestination.name}, {currentDestination.state}
+                  </h3>
+                  <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed mt-2">
+                    {currentDestination.description || currentDestination.overview}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-2 text-xs text-slate-600 dark:text-slate-300 pt-2">
+                  <span className="px-3 py-1 rounded-xl bg-[#F5F7FA] dark:bg-[#07111F] border border-[#E2E8F0] dark:border-[#1E2E42]">
+                    <strong>{currentDestination.duration}</strong>
+                  </span>
+                  <span className="px-3 py-1 rounded-xl bg-[#F5F7FA] dark:bg-[#07111F] border border-[#E2E8F0] dark:border-[#1E2E42]">
+                    <strong>{currentDestination.distance}</strong>
+                  </span>
+                </div>
               </div>
             </div>
-          </div>
+          ) : (
+            <div className="rounded-3xl bg-white dark:bg-[#0E1A29] border border-dashed border-[#E2E8F0] dark:border-[#1E2E42] p-8 text-center space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-orange/10 text-orange flex items-center justify-center mx-auto text-2xl">
+                🧭
+              </div>
+              <h3 className="font-heading font-extrabold text-lg text-charcoal dark:text-white">
+                Choose a Destination
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto">
+                Select one of the destinations above to view route details, explore popular sightseeing spots, and calculate verified transparent pricing.
+              </p>
+            </div>
+          )}
         </section>
 
         {/* ========================================================
@@ -855,15 +1021,17 @@ export default function BookPage() {
             <div className="lg:col-span-8 space-y-8">
 
               {/* People Also Visit */}
-              <PeopleAlsoVisit
-                destination={currentDestination}
-                recommendations={dynamicRecommendations}
-                selectedStops={userStops}
-                onAddStop={handleAddStop}
-                onRemoveStop={handleRemoveStop}
-                title={`PEOPLE ALSO VISIT AROUND ${currentDestination.name.toUpperCase()}`}
-                subtitle={`Popular places travelers often explore while visiting ${currentDestination.name}. Suggestions only — customize as you like.`}
-              />
+              {currentDestination && (
+                <PeopleAlsoVisit
+                  destination={currentDestination}
+                  recommendations={dynamicRecommendations}
+                  selectedStops={userStops}
+                  onAddStop={handleAddStop}
+                  onRemoveStop={handleRemoveStop}
+                  title={`PEOPLE ALSO VISIT AROUND ${currentDestination.name.toUpperCase()}`}
+                  subtitle={`Popular places travelers often explore while visiting ${currentDestination.name}. Suggestions only — customize as you like.`}
+                />
+              )}
 
               {/* Add Your Own Stop Search Bar */}
               <div className="p-6 sm:p-8 rounded-3xl bg-white dark:bg-[#0E1A29] border border-[#E2E8F0] dark:border-[#1E2E42] shadow-sm">
@@ -871,7 +1039,7 @@ export default function BookPage() {
                   selectedStops={userStops}
                   onAddStop={handleAddStop}
                   onRemoveStop={handleRemoveStop}
-                  currentDestinationId={currentDestination.id}
+                  currentDestinationId={currentDestination?.id || ""}
                   currentDestination={currentDestination}
                   pickupLocation={pickupLocation}
                   primaryWaypoints={primaryWaypoints}
@@ -884,13 +1052,16 @@ export default function BookPage() {
             <div className="lg:col-span-4 sticky top-24 space-y-6 w-full min-w-0">
               <FleetJourneyBuilder
                 pickupLocation={pickupLocation}
+                onChangePickupLocation={setPickupLocation}
                 destination={currentDestination}
+                onChangeDestination={(destId) => setSelectedDestId(destId)}
                 selectedStops={userStops}
                 selectedVehicle={selectedVehicle}
                 vehiclePriceDisplay={getVehiclePriceDisplay(selectedVehicle)}
                 primaryWaypoints={primaryWaypoints}
                 onAddStop={handleAddStop}
                 onRemoveStop={handleRemoveStop}
+                onEditStopName={handleEditStopName}
                 onMoveStopUp={handleMoveStopUp}
                 onMoveStopDown={handleMoveStopDown}
                 onReorderStops={handleReorderStops}
@@ -929,38 +1100,38 @@ export default function BookPage() {
             </div>
 
             <div>
-              <label className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block mb-1.5">
-                Start Date
-              </label>
-              <input
-                type="date"
+              <CustomDatePicker
+                id="book-start-date"
+                label="Start Date"
                 value={tripStartDate}
-                onChange={(e) => setTripStartDate(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#07111F] border border-[#E2E8F0] dark:border-[#1E2E42] text-xs font-semibold text-charcoal dark:text-white focus:outline-none focus:border-orange"
+                onChange={(val) => {
+                  setTripStartDate(val);
+                  if (tripEndDate && val > tripEndDate) {
+                    setTripEndDate(val);
+                  }
+                }}
+                placeholder="Select start date"
               />
             </div>
 
             <div>
-              <label className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block mb-1.5">
-                End Date
-              </label>
-              <input
-                type="date"
+              <CustomDatePicker
+                id="book-end-date"
+                label="End Date"
                 value={tripEndDate}
-                onChange={(e) => setTripEndDate(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#07111F] border border-[#E2E8F0] dark:border-[#1E2E42] text-xs font-semibold text-charcoal dark:text-white focus:outline-none focus:border-orange"
+                minDate={tripStartDate}
+                onChange={(val) => setTripEndDate(val)}
+                placeholder="Select end date"
               />
             </div>
 
             <div>
-              <label className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block mb-1.5">
-                Pickup Time
-              </label>
-              <input
-                type="time"
+              <CustomTimePicker
+                id="book-pickup-time"
+                label="Pickup Time"
                 value={tripTime}
-                onChange={(e) => setTripTime(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#07111F] border border-[#E2E8F0] dark:border-[#1E2E42] text-xs font-semibold text-charcoal dark:text-white focus:outline-none focus:border-orange"
+                onChange={(val) => setTripTime(val)}
+                placeholder="Select time"
               />
             </div>
           </div>

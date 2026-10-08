@@ -452,7 +452,22 @@ export const createBooking = async (
       } catch (_) {}
     }
 
-    if (fareCalc) {
+    if (typeof params.baseFare === "number") payload.baseFare = params.baseFare;
+    if (typeof params.baseVehicleFare === "number") payload.baseVehicleFare = params.baseVehicleFare;
+    if (typeof params.driverAllowance === "number") payload.driverAllowance = params.driverAllowance;
+    if (typeof params.totalAllowance === "number") payload.totalAllowance = params.totalAllowance;
+    if (typeof params.platformFee === "number") payload.platformFee = params.platformFee;
+    if (typeof params.gst === "number") payload.gst = params.gst;
+    if (typeof params.taxes === "number") payload.taxes = params.taxes;
+    if (typeof params.totalAmount === "number") payload.totalAmount = params.totalAmount;
+    if (typeof params.totalFare === "number") payload.totalFare = params.totalFare;
+    if (typeof params.estimatedFare === "number") payload.estimatedFare = params.estimatedFare;
+    if (typeof params.advanceAmount === "number") payload.advanceAmount = params.advanceAmount;
+    if (typeof params.advanceFare === "number") payload.advanceFare = params.advanceFare;
+    if (typeof params.balanceDue === "number") payload.balanceDue = params.balanceDue;
+    if (typeof params.remainingBalance === "number") payload.remainingBalance = params.remainingBalance;
+
+    if (!payload.totalFare && !payload.totalAmount && fareCalc) {
       payload.baseCharges = fareCalc.baseCharges;
       payload.baseFare = fareCalc.baseCharges;
       payload.baseVehicleFare = fareCalc.baseCharges;
@@ -470,19 +485,6 @@ export const createBooking = async (
       payload.advanceFare = fareCalc.advance;
       payload.balanceDue = fareCalc.totalFare - fareCalc.advance;
       payload.remainingBalance = fareCalc.totalFare - fareCalc.advance;
-    } else {
-      if (typeof params.baseFare === "number") payload.baseFare = params.baseFare;
-      if (typeof params.baseVehicleFare === "number") payload.baseVehicleFare = params.baseVehicleFare;
-      if (typeof params.driverAllowance === "number") payload.driverAllowance = params.driverAllowance;
-      if (typeof params.totalAllowance === "number") payload.totalAllowance = params.totalAllowance;
-      if (typeof params.platformFee === "number") payload.platformFee = params.platformFee;
-      if (typeof params.gst === "number") payload.gst = params.gst;
-      if (typeof params.taxes === "number") payload.taxes = params.taxes;
-      if (typeof params.totalAmount === "number") payload.totalAmount = params.totalAmount;
-      if (typeof params.totalFare === "number") payload.totalFare = params.totalFare;
-      if (typeof params.estimatedFare === "number") payload.estimatedFare = params.estimatedFare;
-      if (typeof params.advanceAmount === "number") payload.advanceAmount = params.advanceAmount;
-      if (typeof params.balanceDue === "number") payload.balanceDue = params.balanceDue;
     }
 
     if (typeof params.advancePercent === "number") payload.advancePercent = params.advancePercent;
@@ -687,10 +689,19 @@ export const verifyRazorpayPayment = async (
       return { error: "Missing required payment verification parameters." };
     }
 
+    const paidAmount = Number(params.amount || params.advanceFare || 0);
+    const totalFare = Number(params.totalFare || 0);
+    const balanceDue = totalFare > 0 ? Math.max(0, totalFare - paidAmount) : 0;
+
     // 1. Try Cloud Function first
     try {
       const callable = httpsCallable<any, any>(functions, "verifyRazorpayPayment");
-      const callableResponse = await callable(params);
+      const callableResponse = await callable({
+        ...params,
+        amount: paidAmount,
+        totalFare: totalFare,
+        balanceDue: balanceDue,
+      });
       const result = callableResponse?.data;
 
       if (result && result.status === "success") {
@@ -714,11 +725,13 @@ export const verifyRazorpayPayment = async (
         {
           bookingId: cleanBookingId,
           userId: user.uid,
+          amount: paidAmount,
+          currency: "INR",
           razorpayPaymentId: params.razorpayPaymentId,
           razorpayOrderId: params.razorpayOrderId || "",
           razorpaySignature: params.razorpaySignature || "",
           status: "completed",
-          paymentMethod: "razorpay",
+          paymentMethod: "Razorpay Secure Gateway",
           updatedAt: serverTimestamp(),
           createdAt: serverTimestamp(),
         },
@@ -726,14 +739,29 @@ export const verifyRazorpayPayment = async (
       );
 
       const bookingDocRef = doc(db, "bookings", cleanBookingId);
-      await updateDoc(bookingDocRef, {
+      const updatePayload: Record<string, any> = {
         status: "confirmed",
         paymentStatus: "completed",
         paymentMethod: "razorpay",
         paymentId: params.razorpayPaymentId,
+        razorpayPaymentId: params.razorpayPaymentId,
         confirmedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      });
+      };
+
+      if (paidAmount > 0) {
+        updatePayload.amountPaid = paidAmount;
+        updatePayload.advanceAmount = paidAmount;
+        updatePayload.advanceFare = paidAmount;
+      }
+      if (totalFare > 0) {
+        updatePayload.totalFare = totalFare;
+        updatePayload.totalAmount = totalFare;
+        updatePayload.balanceDue = balanceDue;
+        updatePayload.remainingBalance = balanceDue;
+      }
+
+      await updateDoc(bookingDocRef, updatePayload);
 
       console.log("SAFE DIAGNOSTIC LOG — Direct Firestore payment confirmation saved for:", cleanBookingId);
 

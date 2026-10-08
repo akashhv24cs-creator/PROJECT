@@ -15,6 +15,7 @@ import BookingTicketModal from "../components/bookings/BookingTicketModal";
 import CancelBookingModal from "../components/bookings/CancelBookingModal";
 import BookingFiltersModal from "../components/bookings/BookingFiltersModal";
 import BookingSkeletons from "../components/bookings/BookingSkeletons";
+import AIChatAssistantModal from "../components/chat/AIChatAssistantModal.jsx";
 
 import {
   UPCOMING_STATUSES,
@@ -56,6 +57,7 @@ export default function BookingsPage() {
   const [ticketModalBooking, setTicketModalBooking] = useState(null);
   const [cancelModalBooking, setCancelModalBooking] = useState(null);
   const [actionAlert, setActionAlert] = useState(null);
+  const [aiChatModalOpen, setAiChatModalOpen] = useState(false);
 
   // Sync tab with URL search parameter if changed
   const handleTabChange = (tabKey) => {
@@ -269,20 +271,49 @@ export default function BookingsPage() {
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-20 space-y-6 sm:space-y-8">
         
         {/* ========================================================
-            1. CLEAN PAGE HEADER
+            1. CLEAN PAGE HEADER WITH QUICK ZENAI ACTION
            ======================================================== */}
-        <div className="pb-3 border-b border-[#E2E8F0] dark:border-[#1E2E42]">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-[11px] font-extrabold uppercase tracking-widest text-orange">
-              Personal Travel Manager
-            </span>
+        <div className="pb-4 border-b border-[#E2E8F0] dark:border-[#1E2E42] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-[11px] font-extrabold uppercase tracking-widest text-orange">
+                Personal Travel Manager
+              </span>
+            </div>
+            <h1 className="font-extrabold text-2xl sm:text-3xl lg:text-4xl text-charcoal dark:text-white tracking-tight">
+              My Bookings
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
+              View and manage all your trips in one place.
+            </p>
           </div>
-          <h1 className="font-extrabold text-2xl sm:text-3xl lg:text-4xl text-charcoal dark:text-white tracking-tight">
-            My Bookings
-          </h1>
-          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
-            View and manage all your trips in one place.
-          </p>
+
+          <div className="flex items-center gap-2.5 sm:gap-3 flex-wrap">
+            {/* Ask ZenAI Trip Assistant Header Button */}
+            <button
+              type="button"
+              onClick={() => setAiChatModalOpen(true)}
+              className="px-3.5 py-2.5 rounded-xl bg-orange/10 hover:bg-orange/20 border border-orange/30 text-orange font-bold text-xs sm:text-sm flex items-center gap-2 transition-all cursor-pointer shadow-sm group"
+              title="Plan or ask anything with ZenAI"
+            >
+              <svg className="w-4 h-4 text-orange group-hover:rotate-12 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              <span>Ask ZenAI</span>
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            </button>
+
+            {/* Book New Trip CTA */}
+            <Link
+              to="/fleets"
+              className="px-4 py-2.5 rounded-xl bg-orange hover:bg-orangeLight text-white font-bold text-xs sm:text-sm flex items-center gap-1.5 shadow-md shadow-orange/20 transition-all cursor-pointer"
+            >
+              <span>Book New Trip</span>
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+              </svg>
+            </Link>
+          </div>
         </div>
 
           {/* Action Alert Notification Banner */}
@@ -677,6 +708,26 @@ export default function BookingsPage() {
         onApply={(newFilters) => setFilters(newFilters)}
         onReset={() => setFilters({ vehicle: "all", destination: "all", startDate: "" })}
         onClose={() => setFiltersModalOpen(false)}
+      />
+
+      {/* Floating ZenAI Assistant FAB Button */}
+      <button
+        type="button"
+        onClick={() => setAiChatModalOpen(true)}
+        className="fixed bottom-6 right-6 z-40 px-4 py-3 rounded-full bg-gradient-to-r from-orange to-orangeLight text-white font-bold text-xs sm:text-sm shadow-2xl shadow-orange/40 border border-orange/40 hover:scale-105 active:scale-95 transition-all duration-300 flex items-center gap-2.5 cursor-pointer group"
+        title="Plan or ask about trips with ZenAI"
+      >
+        <svg className="w-5 h-5 group-hover:rotate-12 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+        <span>ZenAI Assistant</span>
+        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+      </button>
+
+      {/* Zenera AI Assistant Modal */}
+      <AIChatAssistantModal
+        isOpen={aiChatModalOpen}
+        onClose={() => setAiChatModalOpen(false)}
       />
 
       {/* Footer */}

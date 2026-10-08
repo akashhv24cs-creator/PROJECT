@@ -1,9 +1,13 @@
+import { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { formatDate } from "../bookings/bookingUtils";
 
 export default function ConfirmationPaymentSummary({
   booking,
   payments = [],
 }) {
+  const [breakdownOpen, setBreakdownOpen] = useState(false);
+
   if (!booking) return null;
 
   const totalAmount =
@@ -54,6 +58,25 @@ export default function ConfirmationPaymentSummary({
           : totalAmount - advancePaid
       );
 
+  const baseFare =
+    (typeof booking.baseFare === "number" && booking.baseFare > 0)
+      ? booking.baseFare
+      : (typeof booking.baseVehicleFare === "number" && booking.baseVehicleFare > 0)
+        ? booking.baseVehicleFare
+        : (typeof booking.baseCharges === "number" && booking.baseCharges > 0)
+          ? booking.baseCharges
+          : 0;
+
+  const driverAllowance =
+    (typeof booking.driverAllowance === "number" && booking.driverAllowance >= 0)
+      ? booking.driverAllowance
+      : (typeof booking.totalAllowance === "number" && booking.totalAllowance >= 0)
+        ? booking.totalAllowance
+        : 0;
+
+  const platformFee = typeof booking.platformFee === "number" ? booking.platformFee : 95;
+  const gst = typeof booking.gst === "number" ? booking.gst : typeof booking.taxes === "number" ? booking.taxes : Math.round((baseFare + driverAllowance + platformFee) * 0.05);
+
   const paymentMethod = latestPayment?.method || "Razorpay Secure Gateway";
   const transactionId =
     latestPayment?.id ||
@@ -103,6 +126,70 @@ export default function ConfirmationPaymentSummary({
           Total Trip Value: ₹{totalAmount.toLocaleString("en-IN")}
         </p>
       </div>
+
+      {/* Expandable Itemized Fare Breakdown */}
+      {baseFare > 0 && (
+        <div className="rounded-2xl border border-[#E2E8F0] dark:border-[#1E2E42] bg-[#F5F7FA] dark:bg-[#152436]/60 p-3 space-y-2">
+          <button
+            type="button"
+            onClick={() => setBreakdownOpen(!breakdownOpen)}
+            className="w-full flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-200 hover:text-orange transition-colors cursor-pointer"
+          >
+            <span className="flex items-center gap-1.5">
+              <svg className="w-3.5 h-3.5 text-orange" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+              </svg>
+              <span>Fare Breakdown</span>
+            </span>
+            <span className="text-[11px] text-orange flex items-center gap-1">
+              <span>{breakdownOpen ? "Hide" : "View"}</span>
+              <svg
+                className={`w-3 h-3 transform transition-transform duration-200 ${breakdownOpen ? "rotate-180" : "rotate-0"}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </span>
+          </button>
+
+          <AnimatePresence>
+            {breakdownOpen && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.2 }}
+                className="overflow-hidden space-y-1.5 pt-2 border-t border-[#E2E8F0] dark:border-[#1E2E42] text-[11px]"
+              >
+                <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
+                  <span>Base Vehicle Fare</span>
+                  <span className="font-mono font-medium">₹{Math.round(baseFare).toLocaleString("en-IN")}</span>
+                </div>
+                {driverAllowance > 0 && (
+                  <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
+                    <span>Driver Allowance (Bata)</span>
+                    <span className="font-mono font-medium">₹{Math.round(driverAllowance).toLocaleString("en-IN")}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
+                  <span>Platform & Service Fee</span>
+                  <span className="font-mono font-medium">₹{platformFee}</span>
+                </div>
+                <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
+                  <span>Govt Taxes & GST (5%)</span>
+                  <span className="font-mono font-medium">₹{gst.toLocaleString("en-IN")}</span>
+                </div>
+                <div className="pt-1.5 border-t border-dashed border-[#CBD5E1] dark:border-[#334155] flex items-center justify-between font-bold text-charcoal dark:text-white text-xs">
+                  <span>Total Trip Value</span>
+                  <span className="font-mono">₹{totalAmount.toLocaleString("en-IN")}</span>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
 
       {/* Payment Ledger Metadata */}
       <div className="space-y-2 text-xs text-slate-500 dark:text-slate-400">

@@ -567,6 +567,9 @@ export default function CheckoutPage() {
               razorpayPaymentId: response.razorpay_payment_id,
               razorpayOrderId: response.razorpay_order_id,
               razorpaySignature: response.razorpay_signature,
+              amount: payableNow,
+              totalFare: totalAmount,
+              advancePercent: advancePercent,
             });
 
             if (verifyResult.status === "success" && !verifyResult.error) {
@@ -575,10 +578,26 @@ export default function CheckoutPage() {
                 status: "completed",
               });
 
+              const confirmedBooking = {
+                ...booking,
+                status: "confirmed",
+                paymentStatus: "completed",
+                paymentMethod: "razorpay",
+                razorpayPaymentId: response.razorpay_payment_id,
+                amountPaid: payableNow,
+                advanceAmount: payableNow,
+                advanceFare: payableNow,
+                totalFare: totalAmount,
+                totalAmount: totalAmount,
+                advancePercent: advancePercent,
+                balanceDue: Math.max(0, totalAmount - payableNow),
+                remainingBalance: Math.max(0, totalAmount - payableNow),
+              };
+
               setStatusModalState(null);
               navigate(`/booking/confirmation/${activeBookingId}`, {
                 replace: true,
-                state: { paymentSuccess: true, booking },
+                state: { paymentSuccess: true, booking: confirmedBooking },
               });
             } else {
               throw new Error(verifyResult.error || verifyResult.message || "Payment verification failed");

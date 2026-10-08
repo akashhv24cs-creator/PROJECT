@@ -185,6 +185,7 @@ export interface CreateBookingParams {
   totalFare?: number;
   advancePercent?: number;
   advanceAmount?: number;
+  advanceFare?: number;
   balanceDue?: number;
   remainingBalance?: number;
   baseFare?: number;
@@ -241,6 +242,10 @@ export interface VerifyRazorpayPaymentParams {
   razorpayPaymentId: string;
   razorpayOrderId: string;
   razorpaySignature: string;
+  amount?: number;
+  advanceFare?: number;
+  advancePercent?: number;
+  totalFare?: number;
 }
 
 export interface VerifyRazorpayPaymentResult {

@@ -14,7 +14,6 @@ export default function BookingSidebar({ unreadCount = 0 }) {
   const userInitial = (userProfile?.name?.charAt(0) || "T").toUpperCase();
 
   const navItems = [
-    { label: "Dashboard", href: "/dashboard" },
     { label: "Bookings", href: "/bookings", active: true },
     { label: "Tour Packages", href: "/packages" },
     { label: "Destinations", href: "/book" },

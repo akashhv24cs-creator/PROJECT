@@ -253,7 +253,7 @@ export default function Login() {
       await verifyOTP(confirmationResult, fullOtp);
       setAuthState("success");
       setTimeout(() => {
-        const returnTarget = redirectPath || "/dashboard";
+        const returnTarget = redirectPath || "/bookings";
         navigate(returnTarget, { replace: true });
       }, 1000);
     } catch (err) {

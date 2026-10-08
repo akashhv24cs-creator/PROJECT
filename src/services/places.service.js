@@ -69,89 +69,20 @@ export const POPULAR_BANGALORE_PICKUPS = [
   },
 ];
 
-// Top curated weekend / holiday outstation destinations from Bangalore
-export const POPULAR_DESTINATIONS = [
-  {
-    id: "dest-coorg",
-    name: "Coorg (Madikeri)",
-    detail: "Karnataka • ~260 km",
-    type: "destination",
-    icon: "",
-    distance: "~260 km",
-  },
-  {
-    id: "dest-ooty",
-    name: "Ooty",
-    detail: "Tamil Nadu • ~270 km",
-    type: "destination",
-    icon: "",
-    distance: "~270 km",
-  },
-  {
-    id: "dest-chikmagalur",
-    name: "Chikmagalur",
-    detail: "Karnataka • ~245 km",
-    type: "destination",
-    icon: "",
-    distance: "~245 km",
-  },
-  {
-    id: "dest-mysore",
-    name: "Mysore",
-    detail: "Karnataka • ~145 km",
-    type: "destination",
-    icon: "",
-    distance: "~145 km",
-  },
-  {
-    id: "dest-wayanad",
-    name: "Wayanad",
-    detail: "Kerala • ~280 km",
-    type: "destination",
-    icon: "",
-    distance: "~280 km",
-  },
-  {
-    id: "dest-pondicherry",
-    name: "Pondicherry",
-    detail: "Tamil Nadu / Puducherry • ~310 km",
-    type: "destination",
-    icon: "",
-    distance: "~310 km",
-  },
-  {
-    id: "dest-gokarna",
-    name: "Gokarna",
-    detail: "Karnataka • ~490 km",
-    type: "destination",
-    icon: "",
-    distance: "~490 km",
-  },
-  {
-    id: "dest-kodaikanal",
-    name: "Kodaikanal",
-    detail: "Tamil Nadu • ~465 km",
-    type: "destination",
-    icon: "",
-    distance: "~465 km",
-  },
-  {
-    id: "dest-hampi",
-    name: "Hampi",
-    detail: "Karnataka • ~340 km",
-    type: "destination",
-    icon: "",
-    distance: "~340 km",
-  },
-  {
-    id: "dest-munnar",
-    name: "Munnar",
-    detail: "Kerala • ~480 km",
-    type: "destination",
-    icon: "",
-    distance: "~480 km",
-  },
-];
+/**
+ * Top curated weekend / holiday outstation destinations from Bangalore
+ * Generated dynamically from authoritative DESTINATIONS dataset
+ */
+export const POPULAR_DESTINATIONS = DESTINATIONS.map((dest) => ({
+  id: `dest-${dest.id}`,
+  destId: dest.id,
+  name: dest.name,
+  detail: `${dest.state || "Karnataka"}${dest.distance ? ` • ${dest.distance}` : ""}`,
+  type: "destination",
+  icon: "",
+  distance: dest.distance || "",
+  raw: dest,
+}));
 
 /**
  * Search local curated destinations and spots instantly
@@ -174,6 +105,7 @@ function searchLocalDestinations(query) {
         seen.add(dest.name.toLowerCase());
         results.push({
           id: `local-dest-${dest.id}`,
+          destId: dest.id,
           name: dest.name,
           detail: `${dest.state || "South India"}${dest.distance ? ` • ${dest.distance}` : ""}`,
           type: "destination",
@@ -183,27 +115,9 @@ function searchLocalDestinations(query) {
         });
       }
     }
-
-    // 2. Check nearby tourist spots within this destination
-    if (dest.nearbyStops && Array.isArray(dest.nearbyStops)) {
-      dest.nearbyStops.forEach((stop) => {
-        if (stop.name.toLowerCase().includes(q) && !seen.has(stop.name.toLowerCase())) {
-          seen.add(stop.name.toLowerCase());
-          results.push({
-            id: `local-stop-${stop.id || stop.name}`,
-            name: stop.name,
-            detail: `${dest.name}, ${dest.state || "Karnataka"}${stop.distance ? ` • ${stop.distance}` : ""}`,
-            type: "attraction",
-            icon: "",
-            distance: stop.distance,
-            raw: stop,
-          });
-        }
-      });
-    }
   });
 
-  return results.slice(0, 5);
+  return results;
 }
 
 /**
@@ -251,23 +165,39 @@ async function fetchMapsApiPlaces(query, signal) {
 }
 
 /**
- * Search places combining local dataset with live Maps API
+ * Search places combining local dataset with live Maps API for pickups,
+ * and strictly available destinations for destination selection.
  * @param {string} query Search input
  * @param {object} options Options { signal, isPickup }
  */
 export async function searchPlaces(query = "", options = {}) {
   const q = (query || "").trim();
-  if (!q) {
-    return options.isPickup ? POPULAR_BANGALORE_PICKUPS : POPULAR_DESTINATIONS;
+
+  // DESTINATION SEARCH: Strictly show available destinations from Zenera catalog
+  if (!options.isPickup) {
+    if (!q) {
+      return POPULAR_DESTINATIONS;
+    }
+    const matched = searchLocalDestinations(q);
+    return matched.length > 0 ? matched : [];
   }
 
-  const cacheKey = `${options.isPickup ? "pickup:" : "dest:"}${q.toLowerCase()}`;
+  // PICKUP SEARCH: Local popular pickup spots + Live Maps Search
+  if (!q) {
+    return POPULAR_BANGALORE_PICKUPS;
+  }
+
+  const cacheKey = `pickup:${q.toLowerCase()}`;
   if (placeCache.has(cacheKey)) {
     return placeCache.get(cacheKey);
   }
 
-  // 1. Instant local matches
-  const localResults = searchLocalDestinations(q);
+  // 1. Instant local matches for pickups
+  const localPickups = POPULAR_BANGALORE_PICKUPS.filter(
+    (p) =>
+      p.name.toLowerCase().includes(q.toLowerCase()) ||
+      p.detail.toLowerCase().includes(q.toLowerCase())
+  );
 
   // 2. Live Maps API matches
   let apiResults = [];
@@ -278,8 +208,8 @@ export async function searchPlaces(query = "", options = {}) {
   }
 
   // 3. Merge & Deduplicate
-  const merged = [...localResults];
-  const seenNames = new Set(localResults.map((r) => r.name.toLowerCase().trim()));
+  const merged = [...localPickups];
+  const seenNames = new Set(localPickups.map((r) => r.name.toLowerCase().trim()));
 
   apiResults.forEach((item) => {
     const clean = item.name.toLowerCase().trim();

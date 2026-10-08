@@ -527,3 +527,55 @@ export function calculateDynamicRouteDistanceKm(
     extraStopsKm,
   };
 }
+
+const KNOWN_PLACE_ALIASES: Record<string, string> = {
+  mysuru: "mysore",
+  mysore: "mysore",
+  bengaluru: "bangalore",
+  bangalore: "bangalore",
+  blr: "bangalore",
+  udhagamandalam: "ooty",
+  ooty: "ooty",
+  chikmagalur: "chikmagalur",
+  chikkamagaluru: "chikmagalur",
+  coorg: "coorg",
+  kodagu: "coorg",
+  madikeri: "coorg",
+  gokarna: "gokarna",
+  wayanad: "wayanad",
+  hampi: "hampi",
+  pondicherry: "pondicherry",
+  puducherry: "pondicherry",
+  tirupati: "tirupati",
+  kabini: "kabini",
+  bandipur: "bandipur",
+};
+
+/**
+ * Checks if two location names or objects refer to the same geographical destination.
+ */
+export function isSameLocation(loc1: any, loc2: any): boolean {
+  if (!loc1 || !loc2) return false;
+  
+  const extractKey = (loc: any): string => {
+    const raw = String(typeof loc === "object" ? loc.name || loc.id || "" : loc)
+      .trim()
+      .toLowerCase();
+    // Remove punctuation
+    const clean = raw.replace(/[^\w\s]/gi, " ").trim();
+    const firstWord = clean.split(/\s+/)[0] || "";
+    return KNOWN_PLACE_ALIASES[firstWord] || firstWord;
+  };
+
+  const k1 = extractKey(loc1);
+  const k2 = extractKey(loc2);
+
+  if (!k1 || !k2) return false;
+  if (k1 === k2) return true;
+
+  const raw1 = String(typeof loc1 === "object" ? loc1.name || loc1.id || "" : loc1).toLowerCase();
+  const raw2 = String(typeof loc2 === "object" ? loc2.name || loc2.id || "" : loc2).toLowerCase();
+
+  return raw1.includes(k2) || raw2.includes(k1);
+}
+

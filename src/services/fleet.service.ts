@@ -504,7 +504,7 @@ export function calculateAuthoritativeFare(params: FareCalculationParams, fleetL
   } else if (typeof params.routeDistanceKm === "number" && params.routeDistanceKm > 0) {
     routeDistanceKm = Math.round(params.routeDistanceKm);
   } else {
-    const destOneWayKm = Number(params.destinationDistanceKm || params.distanceKm) || 145;
+    const destOneWayKm = Number(params.destinationDistanceKm || params.distanceKm) || 0;
     const extraStopsKm = Number(params.stopsDistanceKm) || 0;
     routeDistanceKm = Math.round(destOneWayKm * 2 + extraStopsKm);
   }
@@ -512,16 +512,28 @@ export function calculateAuthoritativeFare(params: FareCalculationParams, fleetL
   // Ensure orderedItinerary always contains valid numeric distances for all items
   if (!orderedItinerary || orderedItinerary.length === 0) {
     const defaultOrigin = params.origin || params.pickupLocation || params.startLocation || "Bangalore, Karnataka";
-    const defaultDest = params.destination || (Array.isArray(params.destinations) && params.destinations[0]) || "Mysore";
-    const routeRes = calculateAuthoritativeRoute({
-      origin: defaultOrigin,
-      destination: defaultDest,
-      tripType: params.tripType || "round-trip",
-    });
-    orderedItinerary = routeRes.orderedItinerary;
-    legs = routeRes.legs;
-    if (!routeDistanceKm || routeDistanceKm === 0) {
-      routeDistanceKm = routeRes.totalDistanceKm;
+    const defaultDest = params.destination || (Array.isArray(params.destinations) && params.destinations[0]) || "";
+    if (defaultDest) {
+      const routeRes = calculateAuthoritativeRoute({
+        origin: defaultOrigin,
+        destination: defaultDest,
+        tripType: params.tripType || "round-trip",
+      });
+      orderedItinerary = routeRes.orderedItinerary;
+      legs = routeRes.legs;
+      if (!routeDistanceKm || routeDistanceKm === 0) {
+        routeDistanceKm = routeRes.totalDistanceKm;
+      }
+    } else {
+      orderedItinerary = [{
+        id: "origin-pickup",
+        type: "pickup",
+        name: defaultOrigin,
+        lat: 12.9716,
+        lng: 77.5946,
+        distanceKm: 0,
+        isPrimary: true,
+      }];
     }
   }
 

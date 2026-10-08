@@ -99,8 +99,6 @@ export default function Navbar() {
   const isHome = location.pathname === "/";
   const isBookings =
     location.pathname === "/bookings" || location.pathname.startsWith("/booking");
-  const isDashboard =
-    location.pathname === "/dashboard" || location.pathname === "/profile";
   const isPackages =
     location.pathname === "/packages" || location.pathname === "/tour-packages";
   const isProfile = location.pathname === "/profile";
@@ -203,23 +201,6 @@ export default function Navbar() {
             >
               <span>Bookings</span>
               {isBookings && (
-                <motion.div
-                  layoutId="nav-underline"
-                  className="absolute bottom-0 left-0 right-0 h-0.5 bg-orange rounded-full"
-                />
-              )}
-            </Link>
-
-            <Link
-              to={isAuthenticated ? "/dashboard" : "/login?redirect=/dashboard"}
-              className={`relative py-1.5 text-xs font-semibold tracking-wide transition-colors duration-150 ${
-                isDashboard
-                  ? "text-orange"
-                  : "text-slate-600 dark:text-slate-300 hover:text-charcoal dark:hover:text-white"
-              }`}
-            >
-              <span>Dashboard</span>
-              {isDashboard && (
                 <motion.div
                   layoutId="nav-underline"
                   className="absolute bottom-0 left-0 right-0 h-0.5 bg-orange rounded-full"
@@ -685,17 +666,6 @@ export default function Navbar() {
                 }`}
               >
                 Bookings
-              </Link>
-              <Link
-                to={isAuthenticated ? "/dashboard" : "/login?redirect=/dashboard"}
-                onClick={() => setMenuOpen(false)}
-                className={`block py-2.5 px-2 text-sm font-semibold border-b border-[#E2E8F0]/60 dark:border-white/5 ${
-                  isDashboard
-                    ? "text-orange"
-                    : "text-slate-700 dark:text-slate-200"
-                }`}
-              >
-                My Dashboard
               </Link>
               {isAuthenticated && (
                 <Link

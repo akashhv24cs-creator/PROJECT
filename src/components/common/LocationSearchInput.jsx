@@ -182,7 +182,7 @@ export default function LocationSearchInput({
           placeholder={placeholder}
           required={required}
           autoComplete="off"
-          className={`w-full bg-[#F5F7FA] dark:bg-[#0A1420] border border-[#E2E8F0] dark:border-[#1E2E42] rounded-xl pl-10 pr-9 py-3.5 text-charcoal dark:text-white text-xs sm:text-sm font-medium placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-orange focus:border-orange transition-all ${inputClassName}`}
+          className={`w-full bg-[#F5F7FA] dark:bg-[#0A1420] border border-slate-200 dark:border-slate-800/80 rounded-xl pl-10 pr-9 py-3.5 text-charcoal dark:text-white text-xs sm:text-sm font-medium placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-orange/20 focus:border-orange hover:border-orange/50 transition-all ${inputClassName}`}
         />
 
         {/* Right Action Icons: Spinner or Clear Button */}
@@ -207,12 +207,20 @@ export default function LocationSearchInput({
 
       {/* Dropdown Menu */}
       {isOpen && (
-        <div className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-white dark:bg-[#0E1A29] border border-[#E2E8F0] dark:border-[#1E2E42] rounded-2xl shadow-2xl max-h-72 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/60 animate-in fade-in slide-in-from-top-2 duration-150">
+        <div className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-white dark:bg-[#0E1A29] border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl max-h-72 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/60 animate-in fade-in slide-in-from-top-2 duration-150">
           
           {/* Header pill */}
           <div className="px-3.5 py-2 bg-slate-50 dark:bg-[#0A1420] text-[10px] font-heading font-extrabold uppercase tracking-wider text-slate-400 dark:text-slate-400 flex items-center justify-between">
-            <span>{value.trim() ? "Maps Suggestions" : isPickup ? "Popular Pickup Spots" : "Popular Destinations"}</span>
-            <span className="text-[9px] font-normal text-slate-400">Powered by Maps</span>
+            <span>
+              {!isPickup
+                ? "Available Destinations"
+                : value.trim()
+                ? "Pickup Locations"
+                : "Popular Pickup Spots"}
+            </span>
+            <span className="text-[9px] font-normal text-slate-400">
+              {!isPickup ? "Verified Routes" : "Powered by Maps"}
+            </span>
           </div>
 
           {/* Results List */}
@@ -240,7 +248,7 @@ export default function LocationSearchInput({
                       <p className="font-heading font-bold text-xs sm:text-sm truncate">
                         {item.name}
                       </p>
-                      {item.detail && (
+                      {isPickup && item.detail && (
                         <p className="text-[10px] sm:text-[11px] text-slate-400 dark:text-slate-400 truncate">
                           {item.detail}
                         </p>
@@ -248,7 +256,7 @@ export default function LocationSearchInput({
                     </div>
                   </div>
 
-                  {item.distance && (
+                  {isPickup && item.distance && (
                     <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-orange/10 text-orange shrink-0">
                       {item.distance}
                     </span>
@@ -258,7 +266,11 @@ export default function LocationSearchInput({
             })
           ) : (
             <div className="px-4 py-4 text-center text-xs text-slate-400 dark:text-slate-400">
-              {isLoading ? "Searching Maps..." : "No matching places found. Try typing a city or landmark."}
+              {isLoading
+                ? "Searching..."
+                : !isPickup
+                ? "No matching destination found. Please select from our available outstation destinations."
+                : "No matching places found. Try typing a city or landmark."}
             </div>
           )}
         </div>
